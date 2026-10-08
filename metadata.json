@@ -1,0 +1,6 @@
+{
+  "name": "HR Read",
+  "description": "HR Read - Fast, compact all-in-one document reader and manager for PDF, Word, Excel, PPT, TXT, and Images.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

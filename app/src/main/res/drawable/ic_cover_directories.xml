@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector android:height="32.0dp" android:width="26.0dp" android:viewportWidth="26.0" android:viewportHeight="32.0"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <path android:fillColor="#ea580c" android:pathData="M1,0L17.5858,0C17.851,0 18.1054,0.1054 18.2929,0.2929L25.7071,7.7071C25.8946,7.8946 26,8.149 26,8.4142L26,12L26,31C26,31.5523 25.5523,32 25,32L1,32C0.4477,32 0,31.5523 0,31L0,1C-0,0.4477 0.4477,0 1,0Z" android:strokeColor="#00000000" android:strokeWidth="1.0" android:fillType="evenOdd" />
+    <group>
+        <clip-path android:pathData="M1,0L17.5858,0C17.851,0 18.1054,0.1054 18.2929,0.2929L25.7071,7.7071C25.8946,7.8946 26,8.149 26,8.4142L26,12L26,31C26,31.5523 25.5523,32 25,32L1,32C0.4477,32 0,31.5523 0,31L0,1C-0,0.4477 0.4477,0 1,0Z" />
+        <path android:fillColor="#ffffff" android:pathData="M19,-45L70,-45A1,1 0,0 1,71 -44L71,7A1,1 0,0 1,70 8L19,8A1,1 0,0 1,18 7L18,-44A1,1 0,0 1,19 -45z" android:strokeColor="#00000000" android:strokeWidth="1.0" android:strokeAlpha="0.35" android:fillAlpha="0.35" android:fillType="evenOdd" />
+    </group>
+    <!-- Folder icon in center -->
+    <path android:fillColor="#ffffff" android:pathData="M5,12C4.45,12 4.01,12.45 4.01,13L4,23C4,23.55 4.45,24 5,24L21,24C21.55,24 22,23.55 22,23L22,15C22,14.45 21.55,14 21,14L12,14L10,12L5,12Z" android:strokeColor="#00000000" android:strokeWidth="1.0" android:fillType="nonZero" />
+</vector>
