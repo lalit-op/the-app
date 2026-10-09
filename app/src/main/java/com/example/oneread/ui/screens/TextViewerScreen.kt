@@ -128,6 +128,7 @@ import com.example.oneread.ui.components.RenameDialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.example.oneread.word.ui.WordDocumentRenderer
 import java.io.File
 
 enum class TextReaderTheme(
@@ -834,9 +835,17 @@ fun TextViewerScreen(
                         WordDocumentRenderer(
                             document = liveDocument,
                             searchQuery = searchQuery,
+                            isSearchActive = isSearchActive,
+                            currentMatchIndex = currentMatchIndex,
+                            onMatchIndexChange = { currentMatchIndex = it },
+                            onMatchCountChange = { searchMatchCount = it },
+                            registerSearchNavigators = { next, prev ->
+                                onSearchNext = next
+                                onSearchPrev = prev
+                            },
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(top = 56.dp)
+                                .padding(top = topBarPadding)
                         )
                     }
                     liveDocument.fileType == DocumentType.PPT -> {
@@ -1070,131 +1079,7 @@ private fun ExcelSpreadsheetRenderer(
 }
 
 // =========================================================================================
-// 2. WORD DOCUMENT RENDERER (Clean page/sheet layout with proper margins & typography)
-// =========================================================================================
-@Composable
-private fun WordDocumentRenderer(
-    document: DocumentItem,
-    searchQuery: String,
-    modifier: Modifier = Modifier
-) {
-    var isLoading by remember { mutableStateOf(true) }
-    var paragraphs by remember { mutableStateOf<List<String>>(emptyList()) }
-    val listState = rememberLazyListState()
-
-    LaunchedEffect(document.path) {
-        withContext(Dispatchers.IO) {
-            val file = File(document.path)
-            if (file.exists()) {
-                val isRtf = document.extension.equals("rtf", ignoreCase = true)
-                if (isRtf) {
-                    val rtfParagraphs = parseRtfParagraphs(file)
-                    if (rtfParagraphs.isNotEmpty()) {
-                        paragraphs = rtfParagraphs
-                    }
-                }
-                if (paragraphs.isEmpty()) {
-                    val docxParagraphs = parseDocxParagraphs(file)
-                    if (docxParagraphs.isNotEmpty()) {
-                        paragraphs = docxParagraphs
-                    } else {
-                        paragraphs = runCatching { file.readLines() }.getOrElse { listOf("Unable to read document contents.") }
-                    }
-                }
-            }
-            if (paragraphs.isEmpty()) {
-                paragraphs = listOf(
-                    document.title,
-                    "Document Content Overview",
-                    "This Word document has been imported and is rendered in HR Read's unified reader view.",
-                    "All paragraph styles, headings, and formatting are preserved for a pleasant reading experience."
-                )
-            }
-            isLoading = false
-        }
-    }
-
-    if (isLoading) {
-        Box(modifier = modifier, contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = Color(0xFF2563EB))
-        }
-        return
-    }
-
-    LazyColumn(
-        state = listState,
-        modifier = modifier
-            .background(Color(0xFF0B101E))
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        item {
-            // White Document Page Card (Word style)
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(4.dp, RoundedCornerShape(6.dp)),
-                color = Color.White,
-                shape = RoundedCornerShape(6.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 32.dp)
-                ) {
-                    paragraphs.forEachIndexed { idx, para ->
-                        val isHeading = idx == 0 || (para.length < 50 && !para.endsWith('.'))
-                        val isMatch = searchQuery.isNotBlank() && para.contains(searchQuery, ignoreCase = true)
-
-                        if (isHeading) {
-                            Text(
-                                text = para,
-                                style = if (idx == 0) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isMatch) Color(0xFFB45309) else Color(0xFF1E293B),
-                                modifier = Modifier.padding(bottom = 12.dp, top = if (idx > 0) 16.dp else 0.dp)
-                            )
-                        } else {
-                            val annotatedPara = if (isMatch) {
-                                buildAnnotatedString {
-                                    var current = 0
-                                    val lower = para.lowercase()
-                                    val q = searchQuery.lowercase()
-                                    while (true) {
-                                        val pos = lower.indexOf(q, current)
-                                        if (pos == -1) {
-                                            append(para.substring(current))
-                                            break
-                                        }
-                                        append(para.substring(current, pos))
-                                        withStyle(SpanStyle(background = Color(0xFFFDE047), color = Color.Black, fontWeight = FontWeight.Bold)) {
-                                            append(para.substring(pos, pos + searchQuery.length))
-                                        }
-                                        current = pos + searchQuery.length
-                                    }
-                                }
-                            } else {
-                                buildAnnotatedString { append(para) }
-                            }
-
-                            Text(
-                                text = annotatedPara,
-                                style = MaterialTheme.typography.bodyLarge,
-                                lineHeight = 24.sp,
-                                color = Color(0xFF334155),
-                                modifier = Modifier.padding(bottom = 14.dp)
-                            )
-                        }
-                    }
-                }
-            }
-            Spacer(modifier = Modifier.height(32.dp))
-        }
-    }
-}
-
-// =========================================================================================
-// 3. PLAIN TEXT DOCUMENT RENDERER (Monospace, exact whitespace & tabs, 2D scroll, ASCII-safe)
+// 2. PLAIN TEXT DOCUMENT RENDERER (Monospace, exact whitespace & tabs, 2D scroll, ASCII-safe)
 // =========================================================================================
 
 /**
@@ -1498,23 +1383,6 @@ private fun PlainDocumentRenderer(
 // =========================================================================================
 // Lightweight OpenXML Parsers (pure Kotlin, standard Java Zip - 0 external dependencies)
 // =========================================================================================
-private fun parseDocxParagraphs(file: File): List<String> {
-    return runCatching {
-        val zip = java.util.zip.ZipFile(file)
-        val entry = zip.getEntry("word/document.xml") ?: return@runCatching emptyList()
-        val xml = zip.getInputStream(entry).bufferedReader().use { it.readText() }
-        val paragraphs = mutableListOf<String>()
-        val pRegex = Regex("<w:p[ >](.*?)</w:p>", RegexOption.DOT_MATCHES_ALL)
-        val tRegex = Regex("<w:t[ >](.*?)</w:t>", RegexOption.DOT_MATCHES_ALL)
-        for (pMatch in pRegex.findAll(xml)) {
-            val text = tRegex.findAll(pMatch.value).joinToString("") { it.groupValues[1] }
-            if (text.isNotBlank()) paragraphs.add(text)
-        }
-        zip.close()
-        paragraphs
-    }.getOrElse { emptyList() }
-}
-
 private fun parseXlsxCells(file: File): List<List<List<String>>> {
     return runCatching {
         val zip = java.util.zip.ZipFile(file)
@@ -1555,91 +1423,4 @@ private fun parseXlsxCells(file: File): List<List<List<String>>> {
         zip.close()
         if (rows.isNotEmpty()) listOf(rows) else emptyList()
     }.getOrElse { emptyList() }
-}
-
-private fun parseRtfParagraphs(file: File): List<String> {
-    return runCatching {
-        val raw = file.readText(Charsets.ISO_8859_1)
-        val text = extractRtfText(raw)
-        text.split("\n")
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-    }.getOrElse { emptyList() }
-}
-
-private fun extractRtfText(rtf: String): String {
-    val sb = StringBuilder()
-    var i = 0
-    val len = rtf.length
-    var groupDepth = 0
-    var skipGroupDepth = -1
-
-    while (i < len) {
-        val c = rtf[i]
-        when (c) {
-            '{' -> {
-                groupDepth++
-                i++
-            }
-            '}' -> {
-                if (groupDepth == skipGroupDepth) {
-                    skipGroupDepth = -1
-                }
-                groupDepth--
-                i++
-            }
-            '\\' -> {
-                i++
-                if (i >= len) break
-                val next = rtf[i]
-                when (next) {
-                    '\\', '{', '}' -> {
-                        if (skipGroupDepth == -1) sb.append(next)
-                        i++
-                    }
-                    '\'' -> {
-                        i++
-                        if (i + 2 <= len) {
-                            val hex = rtf.substring(i, i + 2)
-                            val byteVal = hex.toIntOrNull(16)
-                            if (byteVal != null && skipGroupDepth == -1) {
-                                sb.append(byteVal.toChar())
-                            }
-                            i += 2
-                        }
-                    }
-                    else -> {
-                        val start = i
-                        while (i < len && rtf[i].isLetter()) {
-                            i++
-                        }
-                        val word = rtf.substring(start, i)
-                        while (i < len && (rtf[i].isDigit() || rtf[i] == '-')) {
-                            i++
-                        }
-                        if (i < len && rtf[i] == ' ') {
-                            i++
-                        }
-                        when (word) {
-                            "par", "line" -> if (skipGroupDepth == -1) sb.append("\n")
-                            "tab" -> if (skipGroupDepth == -1) sb.append("\t")
-                            "fonttbl", "colortbl", "stylesheet", "info", "pict" -> {
-                                skipGroupDepth = groupDepth
-                            }
-                        }
-                    }
-                }
-            }
-            '\r', '\n' -> {
-                i++
-            }
-            else -> {
-                if (skipGroupDepth == -1) {
-                    sb.append(c)
-                }
-                i++
-            }
-        }
-    }
-    return sb.toString()
 }

@@ -47,6 +47,8 @@ import androidx.compose.ui.unit.sp
 import com.example.oneread.workspace.model.DocumentTab
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.example.oneread.word.parser.DocxParser
+import com.example.oneread.word.model.DocxBlock
 import java.io.File
 import java.io.FileOutputStream
 import java.util.zip.ZipFile
@@ -293,17 +295,13 @@ fun WordViewerComponent(
 
 private fun parseDocx(file: File): List<String> {
     return runCatching {
-        val zip = ZipFile(file)
-        val entry = zip.getEntry("word/document.xml") ?: return@runCatching emptyList()
-        val xml = zip.getInputStream(entry).bufferedReader().use { it.readText() }
-        val paragraphs = mutableListOf<String>()
-        val pRegex = Regex("<w:p[ >](.*?)</w:p>", RegexOption.DOT_MATCHES_ALL)
-        val tRegex = Regex("<w:t[ >](.*?)</w:t>", RegexOption.DOT_MATCHES_ALL)
-        for (pMatch in pRegex.findAll(xml)) {
-            val text = tRegex.findAll(pMatch.value).joinToString("") { it.groupValues[1] }
-            if (text.isNotBlank()) paragraphs.add(text)
+        val doc = DocxParser.parse(file)
+        doc.allBlocks.mapNotNull { block ->
+            when (block) {
+                is DocxBlock.Paragraph -> block.fullText.ifBlank { null }
+                is DocxBlock.Table -> block.allText.ifBlank { null }
+                else -> null
+            }
         }
-        zip.close()
-        paragraphs
     }.getOrElse { emptyList() }
 }
