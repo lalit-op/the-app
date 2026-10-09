@@ -160,9 +160,13 @@ class DocumentRepository(
     }
 
     suspend fun importFileFromUri(uri: Uri, displayName: String? = null): DocumentItem = withContext(Dispatchers.IO) {
+        val resolvedName = if (!displayName.isNullOrBlank()) {
+            displayName
+        } else {
+            com.example.oneread.workspace.docmanager.FileDetector.getFileNameFromUri(context, uri)
+        }
         val docsDir = File(context.filesDir, "documents").apply { mkdirs() }
-        val name = displayName ?: "imported_doc_${System.currentTimeMillis()}"
-        val targetFile = File(docsDir, name)
+        val targetFile = File(docsDir, resolvedName)
 
         context.contentResolver.openInputStream(uri)?.use { input ->
             FileOutputStream(targetFile).use { output ->
@@ -170,16 +174,33 @@ class DocumentRepository(
             }
         }
 
-        val type = scanner.detectDocumentType(name, null) ?: DocumentType.TXT
+        val mimeType = try { context.contentResolver.getType(uri) } catch (_: Exception) { null }
+        val ext = targetFile.extension.lowercase().ifBlank {
+            DocumentTypeRegistry.extractExtension(resolvedName)
+        }
+
+        // Authoritative detection: name + MIME, then magic bytes if needed
+        val type = scanner.detectDocumentType(resolvedName, mimeType)
+            ?: (if (targetFile.exists() && targetFile.length() >= 4) {
+                when (com.example.oneread.workspace.docmanager.FileDetector.detectFormat(targetFile)) {
+                    com.example.oneread.workspace.model.DocumentFormat.PDF -> DocumentType.PDF
+                    com.example.oneread.workspace.model.DocumentFormat.WORD -> DocumentType.WORD
+                    com.example.oneread.workspace.model.DocumentFormat.EXCEL -> DocumentType.EXCEL
+                    com.example.oneread.workspace.model.DocumentFormat.PPT -> DocumentType.PPT
+                    else -> null
+                }
+            } else null)
+            ?: if (ext in DocumentTypeRegistry.PDF_EXTENSIONS) DocumentType.PDF else DocumentType.TXT
+
         val pageCount = if (type == DocumentType.PDF) countPdfPages(targetFile) else 1
         val isProtected = SecurityDetector.isPasswordProtected(targetFile, type, context)
 
         val entity = DocumentEntity(
             uri = Uri.fromFile(targetFile).toString(),
-            title = name,
+            title = resolvedName,
             path = targetFile.absolutePath,
-            mimeType = "",
-            extension = targetFile.extension.lowercase(),
+            mimeType = mimeType ?: "",
+            extension = ext,
             fileType = type,
             sizeBytes = targetFile.length(),
             lastModified = System.currentTimeMillis(),

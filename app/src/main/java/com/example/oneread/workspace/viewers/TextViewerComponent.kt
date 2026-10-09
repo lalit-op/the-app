@@ -89,7 +89,21 @@ fun TextViewerComponent(
                 }
 
                 if (targetFile != null && targetFile.exists()) {
-                    textContent = targetFile.readText()
+                    val isPdf = tab.title.endsWith(".pdf", ignoreCase = true) ||
+                        tab.fileType == com.example.oneread.workspace.model.DocumentFormat.PDF ||
+                        (targetFile.length() >= 4 && runCatching {
+                            java.io.FileInputStream(targetFile).use { input ->
+                                val header = ByteArray(4)
+                                val read = input.read(header)
+                                read >= 4 && header[0] == 0x25.toByte() && header[1] == 0x50.toByte() && header[2] == 0x44.toByte() && header[3] == 0x46.toByte()
+                            }
+                        }.getOrDefault(false))
+
+                    if (isPdf) {
+                        textContent = "PDF document detected. Please open with the dedicated PDF viewer."
+                    } else {
+                        textContent = targetFile.readText()
+                    }
                 } else if (textContent.isBlank()) {
                     textContent = "Welcome to One Read Document Workspace.\nType text here or open any document from the top tab bar."
                 }

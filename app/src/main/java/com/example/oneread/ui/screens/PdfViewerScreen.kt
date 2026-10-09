@@ -87,6 +87,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
+import android.content.Intent
+import android.net.Uri
+import android.util.Log
+import android.widget.Toast
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.text.style.TextAlign
+import java.io.FileOutputStream
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -152,6 +161,8 @@ import com.tom_roush.pdfbox.pdmodel.encryption.InvalidPasswordException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.hypot
@@ -225,9 +236,12 @@ fun PdfViewerScreen(
     var passwordError by remember { mutableStateOf<String?>(null) }
     var isUnlocking by remember { mutableStateOf(false) }
     var unlockedTempFile by remember { mutableStateOf<File?>(null) }
+    var cachedRenderFile by remember { mutableStateOf<File?>(null) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var reloadTrigger by remember { mutableIntStateOf(0) }
 
     var isInvertColors by remember { mutableStateOf(false) }
-    var totalPages by remember { mutableIntStateOf(1) }
+    var totalPages by remember { mutableIntStateOf(liveDocument.pageCount.coerceAtLeast(1)) }
     var currentPage by remember { mutableIntStateOf(liveDocument.lastReadPage.coerceAtLeast(1)) }
     var rotationAngle by remember { mutableIntStateOf(0) }
 
@@ -282,33 +296,86 @@ fun PdfViewerScreen(
 
     // Bitmap cache for rendered pages
     val renderedPages = remember { mutableStateMapOf<Int, Bitmap>() }
+    val renderMutex = remember { Mutex() }
     var pdfRenderer by remember { mutableStateOf<PdfRenderer?>(null) }
     var pfd by remember { mutableStateOf<ParcelFileDescriptor?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+
+    suspend fun resolvePdfFile(doc: DocumentItem): File? = withContext(Dispatchers.IO) {
+        // 1. Direct path check (if it's not a content URI)
+        if (doc.path.isNotBlank() && !doc.path.startsWith("content://")) {
+            val f = File(doc.path)
+            if (f.exists() && f.canRead() && f.length() > 0) {
+                return@withContext f
+            }
+        }
+        // 2. URI check (content:// or file://)
+        val targetUriStr = if (doc.uri.isNotBlank()) doc.uri else if (doc.path.startsWith("content://")) doc.path else ""
+        if (targetUriStr.isNotBlank()) {
+            try {
+                val uri = Uri.parse(targetUriStr)
+                if (uri.scheme == "file") {
+                    val f = File(uri.path ?: "")
+                    if (f.exists() && f.canRead() && f.length() > 0) return@withContext f
+                }
+                val tempFile = File(context.cacheDir, "pdf_render_${doc.id.coerceAtLeast(0)}_${System.currentTimeMillis()}.pdf")
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(tempFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                if (tempFile.exists() && tempFile.length() > 0) {
+                    return@withContext tempFile
+                }
+            } catch (e: Exception) {
+                Log.e("PdfViewerScreen", "Failed to resolve PDF from URI: $targetUriStr", e)
+            }
+        }
+        // 3. Fallback: If path is not blank, try reading stream via Uri.fromFile
+        if (doc.path.isNotBlank() && !doc.path.startsWith("content://")) {
+            try {
+                val uri = Uri.fromFile(File(doc.path))
+                val tempFile = File(context.cacheDir, "pdf_render_${doc.id.coerceAtLeast(0)}_${System.currentTimeMillis()}.pdf")
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(tempFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                if (tempFile.exists() && tempFile.length() > 0) {
+                    return@withContext tempFile
+                }
+            } catch (_: Exception) {}
+        }
+        null
+    }
 
     fun openRendererForFile(targetFile: File) {
         try {
             val descriptor = ParcelFileDescriptor.open(targetFile, ParcelFileDescriptor.MODE_READ_ONLY)
             val renderer = PdfRenderer(descriptor)
+            pfd?.close()
+            pdfRenderer?.close()
             pfd = descriptor
             pdfRenderer = renderer
             totalPages = renderer.pageCount
             renderedPages.values.forEach { if (!it.isRecycled) it.recycle() }
             renderedPages.clear()
             isLoading = false
+            errorMessage = null
             isPasswordRequired = false
             showPasswordDialog = false
             passwordError = null
         } catch (e: Exception) {
             e.printStackTrace()
             isLoading = false
+            errorMessage = e.localizedMessage ?: "Failed to render PDF."
         }
     }
 
     suspend fun attemptUnlock(password: String) = withContext(Dispatchers.IO) {
         isUnlocking = true
         withContext(Dispatchers.Main) { passwordError = null }
-        val file = File(liveDocument.path)
+        val file = cachedRenderFile ?: File(liveDocument.path)
         try {
             PDFBoxResourceLoader.init(context.applicationContext)
             val pdDoc = PDDocument.load(file, password)
@@ -332,31 +399,36 @@ fun PdfViewerScreen(
             e.printStackTrace()
             withContext(Dispatchers.Main) {
                 isUnlocking = false
-                val msg = e.message ?: ""
-                if (msg.contains("password", ignoreCase = true) ||
-                    e.cause is InvalidPasswordException) {
-                    passwordError = "Incorrect password"
-                } else {
-                    passwordError = "Incorrect password"
-                }
+                passwordError = "Incorrect password"
             }
         }
     }
 
-    // Initialize renderer with password protection detection
-    LaunchedEffect(liveDocument.path) {
+    // Initialize renderer with password protection detection and ContentResolver fallback
+    LaunchedEffect(liveDocument.id, liveDocument.path, liveDocument.uri, reloadTrigger) {
         withContext(Dispatchers.IO) {
-            val file = File(liveDocument.path)
-            if (file.exists()) {
+            withContext(Dispatchers.Main) {
+                isLoading = true
+                errorMessage = null
+            }
+            val resolvedFile = resolvePdfFile(liveDocument)
+            if (resolvedFile != null && resolvedFile.exists()) {
+                if (resolvedFile.absolutePath != liveDocument.path) {
+                    cachedRenderFile?.delete()
+                    cachedRenderFile = resolvedFile
+                }
                 var requiresPassword = false
                 try {
-                    val descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+                    val descriptor = ParcelFileDescriptor.open(resolvedFile, ParcelFileDescriptor.MODE_READ_ONLY)
                     val renderer = PdfRenderer(descriptor)
                     withContext(Dispatchers.Main) {
+                        pfd?.close()
+                        pdfRenderer?.close()
                         pfd = descriptor
                         pdfRenderer = renderer
                         totalPages = renderer.pageCount
                         isLoading = false
+                        errorMessage = null
                     }
                 } catch (e: SecurityException) {
                     requiresPassword = true
@@ -366,7 +438,7 @@ fun PdfViewerScreen(
                     } else {
                         try {
                             PDFBoxResourceLoader.init(context.applicationContext)
-                            val testDoc = PDDocument.load(file)
+                            val testDoc = PDDocument.load(resolvedFile)
                             if (testDoc.isEncrypted) {
                                 requiresPassword = true
                             }
@@ -376,6 +448,11 @@ fun PdfViewerScreen(
                         } catch (pe: Exception) {
                             if (pe.message?.contains("password", ignoreCase = true) == true) {
                                 requiresPassword = true
+                            } else {
+                                withContext(Dispatchers.Main) {
+                                    isLoading = false
+                                    errorMessage = e.localizedMessage ?: "Failed to open PDF document."
+                                }
                             }
                         }
                     }
@@ -391,12 +468,13 @@ fun PdfViewerScreen(
             } else {
                 withContext(Dispatchers.Main) {
                     isLoading = false
+                    errorMessage = "File does not exist or cannot be accessed on this device."
                 }
             }
         }
     }
 
-    DisposableEffect(liveDocument.path) {
+    DisposableEffect(liveDocument.id, liveDocument.path) {
         onDispose {
             renderedPages.values.forEach { if (!it.isRecycled) it.recycle() }
             renderedPages.clear()
@@ -405,6 +483,7 @@ fun PdfViewerScreen(
                 pfd?.close()
             } catch (_: Exception) {}
             unlockedTempFile?.delete()
+            cachedRenderFile?.delete()
         }
     }
 
@@ -413,26 +492,58 @@ fun PdfViewerScreen(
         val renderer = pdfRenderer ?: return@withContext null
         if (pageIndex !in 0 until renderer.pageCount) return@withContext null
 
-        renderedPages[pageIndex]?.let { return@withContext it }
+        renderedPages[pageIndex]?.let { if (!it.isRecycled) return@withContext it }
 
-        try {
-            val page = renderer.openPage(pageIndex)
-            val density = context.resources.displayMetrics.density
-            val renderScale = 2f.coerceAtLeast(density) // High-res rendering
-            val width = (page.width * renderScale).toInt().coerceAtLeast(1)
-            val height = (page.height * renderScale).toInt().coerceAtLeast(1)
+        renderMutex.withLock {
+            // Re-check cache under lock
+            renderedPages[pageIndex]?.let { if (!it.isRecycled) return@withLock it }
 
-            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            val canvas = android.graphics.Canvas(bitmap)
-            canvas.drawColor(android.graphics.Color.WHITE)
-            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-            page.close()
+            val r = pdfRenderer ?: return@withLock null
+            if (pageIndex !in 0 until r.pageCount) return@withLock null
 
-            renderedPages[pageIndex] = bitmap
-            bitmap
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
+            var page: PdfRenderer.Page? = null
+            try {
+                page = r.openPage(pageIndex)
+                val screenWidth = context.resources.displayMetrics.widthPixels
+                val pageW = page.width
+                val pageH = page.height
+
+                if (pageW <= 0 || pageH <= 0) return@withLock null
+
+                // Calculate optimal scale for razor-sharp handwritten scans
+                val renderScale = (screenWidth.toFloat() / pageW.toFloat()).coerceIn(1.2f, 2.8f)
+                var destWidth = (pageW * renderScale).toInt().coerceAtLeast(1)
+                var destHeight = (pageH * renderScale).toInt().coerceAtLeast(1)
+
+                // Texture safety limit: cap max dimension to 2560px
+                val maxDim = 2560
+                if (maxOf(destWidth, destHeight) > maxDim) {
+                    val downscale = maxDim.toFloat() / maxOf(destWidth, destHeight).toFloat()
+                    destWidth = (destWidth * downscale).toInt().coerceAtLeast(1)
+                    destHeight = (destHeight * downscale).toInt().coerceAtLeast(1)
+                }
+
+                val bitmap = try {
+                    Bitmap.createBitmap(destWidth, destHeight, Bitmap.Config.ARGB_8888)
+                } catch (oom: OutOfMemoryError) {
+                    System.gc()
+                    Bitmap.createBitmap((destWidth / 2).coerceAtLeast(1), (destHeight / 2).coerceAtLeast(1), Bitmap.Config.RGB_565)
+                }
+
+                val canvas = android.graphics.Canvas(bitmap)
+                canvas.drawColor(android.graphics.Color.WHITE)
+                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+
+                renderedPages[pageIndex] = bitmap
+                bitmap
+            } catch (t: Throwable) {
+                Log.e("PdfViewerScreen", "Error rendering page $pageIndex", t)
+                null
+            } finally {
+                try {
+                    page?.close()
+                } catch (_: Exception) {}
+            }
         }
     }
 
@@ -497,10 +608,11 @@ fun PdfViewerScreen(
         PdfSearchEngine.init(context)
     }
 
-    LaunchedEffect(liveDocument.path) {
-        if (File(liveDocument.path).exists()) {
+    LaunchedEffect(liveDocument.id, liveDocument.path, cachedRenderFile) {
+        val f = cachedRenderFile ?: File(liveDocument.path)
+        if (f.exists()) {
             withContext(Dispatchers.IO) {
-                PdfSearchEngine.getPageData(liveDocument.path)
+                PdfSearchEngine.getPageData(f.absolutePath)
             }
         }
     }
@@ -513,7 +625,10 @@ fun PdfViewerScreen(
         } else {
             isSearching = true
             delay(200)
-            val results = PdfSearchEngine.search(liveDocument.path, searchQuery)
+            val searchPath = cachedRenderFile?.absolutePath ?: liveDocument.path
+            val results = if (File(searchPath).exists()) {
+                PdfSearchEngine.search(searchPath, searchQuery)
+            } else emptyList()
             searchMatches = results
             isSearching = false
             if (results.isNotEmpty()) {
@@ -666,13 +781,84 @@ fun PdfViewerScreen(
         ) {
             if (isLoading) {
                 CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-            } else if (totalPages == 0) {
-                Text(
-                    text = "Unable to read PDF file.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.align(Alignment.Center)
-                )
+            } else if (errorMessage != null || totalPages == 0 || pdfRenderer == null) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(24.dp)
+                        .fillMaxWidth(0.9f)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "Error",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Text(
+                            text = liveDocument.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                        Text(
+                            text = errorMessage ?: "Unable to read PDF file.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Button(
+                                onClick = { reloadTrigger++ },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Retry")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    try {
+                                        val uri = if (liveDocument.uri.isNotBlank()) {
+                                            Uri.parse(liveDocument.uri)
+                                        } else {
+                                            androidx.core.content.FileProvider.getUriForFile(
+                                                context,
+                                                "${context.packageName}.fileprovider",
+                                                File(liveDocument.path)
+                                            )
+                                        }
+                                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                                            setDataAndType(uri, "application/pdf")
+                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        }
+                                        context.startActivity(Intent.createChooser(intent, "Open with"))
+                                    } catch (_: Exception) {
+                                        Toast.makeText(context, "No external app available to open PDF", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.weight(1.1f)
+                            ) {
+                                Text("Open With")
+                            }
+                            TextButton(
+                                onClick = onBack,
+                                modifier = Modifier.weight(0.8f)
+                            ) {
+                                Text("Close")
+                            }
+                        }
+                    }
+                }
             } else {
                 val colorFilter = if (isInvertColors) {
                     val matrix = floatArrayOf(
@@ -714,10 +900,13 @@ fun PdfViewerScreen(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         items(totalPages) { index ->
-                            var pageBitmap by remember { mutableStateOf<Bitmap?>(null) }
+                            val cached = renderedPages[index]
+                            var pageBitmap by remember(index, cached) { mutableStateOf(cached) }
 
-                            LaunchedEffect(index) {
-                                pageBitmap = renderPage(index)
+                            LaunchedEffect(index, pdfRenderer) {
+                                if (pageBitmap == null) {
+                                    pageBitmap = renderPage(index)
+                                }
                             }
 
                             Box(
@@ -819,10 +1008,13 @@ fun PdfViewerScreen(
                                 translationY = offset.y
                             )
                     ) { pageIdx ->
-                        var pageBitmap by remember { mutableStateOf<Bitmap?>(null) }
+                        val cached = renderedPages[pageIdx]
+                        var pageBitmap by remember(pageIdx, cached) { mutableStateOf(cached) }
 
-                        LaunchedEffect(pageIdx) {
-                            pageBitmap = renderPage(pageIdx)
+                        LaunchedEffect(pageIdx, pdfRenderer) {
+                            if (pageBitmap == null) {
+                                pageBitmap = renderPage(pageIdx)
+                            }
                         }
 
                         BoxWithConstraints(

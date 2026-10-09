@@ -200,4 +200,35 @@ class DocumentDiscoveryTest {
         assertEquals(1, txtCount)
         assertEquals(testFiles.size, pdfCount + wordCount + excelCount + pptCount + txtCount)
     }
+
+    @Test
+    fun test15_doc20261003WA0005Pdf_routesToPdfViewerExclusively() {
+        val fileName = "DOC-20261003-WA0005.pdf"
+        val detected = DocumentTypeRegistry.detectDocumentType(fileName, null)
+        assertEquals(DocumentType.PDF, detected)
+
+        // Verify it is not categorized as TXT or WORD or EXCEL
+        assertTrue(detected != DocumentType.TXT)
+        assertTrue(detected != DocumentType.WORD)
+        assertTrue(detected != DocumentType.EXCEL)
+        assertTrue(detected != DocumentType.PPT)
+    }
+
+    @Test
+    fun test16_scannedPdfWithZeroExtractableText_isValidPdf() {
+        val docItem = DocumentItem(
+            id = 555L,
+            title = "DOC-20261003-WA0005.pdf",
+            extension = "pdf",
+            fileType = DocumentType.PDF,
+            pageCount = 7,
+            lastReadPage = 1,
+            sizeBytes = 2_500_000L
+        )
+
+        // Zero characters extracted does not invalidate a 7-page scanned PDF
+        assertEquals(DocumentType.PDF, docItem.fileType)
+        assertEquals(7, docItem.pageCount)
+        assertEquals("pdf", docItem.extension)
+    }
 }

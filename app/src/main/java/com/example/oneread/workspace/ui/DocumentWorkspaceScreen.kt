@@ -394,15 +394,24 @@ fun DocumentWorkspaceScreen(
                             )
                         }
                         DocumentFormat.UNKNOWN -> {
-                            TextViewerComponent(
-                                tab = activeTab,
-                                onUpdateTab = { updated ->
-                                    tabManager.updateTabState(activeTab.id) { updated }
-                                },
-                                onSaveContent = { newText ->
-                                    tabManager.saveTabContent(activeTab.id, newText)
-                                }
-                            )
+                            if (activeTab.title.endsWith(".pdf", ignoreCase = true)) {
+                                PdfViewerComponent(
+                                    tab = activeTab,
+                                    onUpdateTab = { updated ->
+                                        tabManager.updateTabState(activeTab.id) { updated }
+                                    }
+                                )
+                            } else {
+                                TextViewerComponent(
+                                    tab = activeTab,
+                                    onUpdateTab = { updated ->
+                                        tabManager.updateTabState(activeTab.id) { updated }
+                                    },
+                                    onSaveContent = { newText ->
+                                        tabManager.saveTabContent(activeTab.id, newText)
+                                    }
+                                )
+                            }
                         }
                     }
                 }

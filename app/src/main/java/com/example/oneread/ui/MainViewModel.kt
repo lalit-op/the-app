@@ -38,6 +38,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileInputStream
 
 data class DirectoryInfo(
     val name: String,
@@ -424,11 +426,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         closeSwitcherSheet()
         tabManager.activateDocument(tab.id)
         val doc = tab.toDocumentItem()
-        when (tab.fileType) {
-            DocumentFormat.PDF -> navigateTo(Screen.PdfViewer(doc))
-            DocumentFormat.PPT -> navigateTo(Screen.PptViewer(doc))
-            DocumentFormat.IMAGE -> navigateTo(Screen.ImageViewer(doc))
-            DocumentFormat.EXCEL, DocumentFormat.CSV -> navigateTo(Screen.ExcelViewer(doc))
+        when {
+            tab.fileType == DocumentFormat.PDF || doc.fileType == DocumentType.PDF || doc.title.endsWith(".pdf", ignoreCase = true) || doc.extension.equals("pdf", ignoreCase = true) -> {
+                navigateTo(Screen.PdfViewer(doc))
+            }
+            tab.fileType == DocumentFormat.PPT || doc.fileType == DocumentType.PPT -> navigateTo(Screen.PptViewer(doc))
+            tab.fileType == DocumentFormat.IMAGE -> navigateTo(Screen.ImageViewer(doc))
+            tab.fileType == DocumentFormat.EXCEL || tab.fileType == DocumentFormat.CSV || doc.fileType == DocumentType.EXCEL -> navigateTo(Screen.ExcelViewer(doc))
             else -> navigateTo(Screen.TextViewer(doc))
         }
     }
@@ -440,11 +444,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val remainingActive = tabManager.activeTab
             if (remainingActive != null) {
                 val doc = remainingActive.toDocumentItem()
-                when (remainingActive.fileType) {
-                    DocumentFormat.PDF -> navigateTo(Screen.PdfViewer(doc))
-                    DocumentFormat.PPT -> navigateTo(Screen.PptViewer(doc))
-                    DocumentFormat.IMAGE -> navigateTo(Screen.ImageViewer(doc))
-                    DocumentFormat.EXCEL, DocumentFormat.CSV -> navigateTo(Screen.ExcelViewer(doc))
+                when {
+                    remainingActive.fileType == DocumentFormat.PDF || doc.fileType == DocumentType.PDF || doc.title.endsWith(".pdf", ignoreCase = true) || doc.extension.equals("pdf", ignoreCase = true) -> {
+                        navigateTo(Screen.PdfViewer(doc))
+                    }
+                    remainingActive.fileType == DocumentFormat.PPT || doc.fileType == DocumentType.PPT -> navigateTo(Screen.PptViewer(doc))
+                    remainingActive.fileType == DocumentFormat.IMAGE -> navigateTo(Screen.ImageViewer(doc))
+                    remainingActive.fileType == DocumentFormat.EXCEL || remainingActive.fileType == DocumentFormat.CSV || doc.fileType == DocumentType.EXCEL -> navigateTo(Screen.ExcelViewer(doc))
                     else -> navigateTo(Screen.TextViewer(doc))
                 }
             } else {
@@ -482,12 +488,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val tab = tabManager.openDocument(doc, activate = true)
         restoreResumeCardEligibility(tab.id)
-        val activeDoc = tab.toDocumentItem()
-        when (tab.fileType) {
-            DocumentFormat.PDF -> navigateTo(Screen.PdfViewer(activeDoc))
-            DocumentFormat.PPT -> navigateTo(Screen.PptViewer(activeDoc))
-            DocumentFormat.IMAGE -> navigateTo(Screen.ImageViewer(activeDoc))
-            DocumentFormat.EXCEL, DocumentFormat.CSV -> navigateTo(Screen.ExcelViewer(activeDoc))
+        val activeDoc = tab.toDocumentItem().copy(
+            isFavorite = doc.isFavorite,
+            extension = if (doc.extension.isNotBlank()) doc.extension else tab.displayExtension.lowercase()
+        )
+
+        val isPdf = tab.fileType == DocumentFormat.PDF ||
+            doc.fileType == DocumentType.PDF ||
+            activeDoc.fileType == DocumentType.PDF ||
+            activeDoc.title.endsWith(".pdf", ignoreCase = true) ||
+            activeDoc.extension.equals("pdf", ignoreCase = true) ||
+            doc.title.endsWith(".pdf", ignoreCase = true) ||
+            doc.extension.equals("pdf", ignoreCase = true) ||
+            (doc.path.isNotBlank() && doc.path.endsWith(".pdf", ignoreCase = true)) ||
+            (doc.uri.isNotBlank() && doc.uri.contains(".pdf", ignoreCase = true)) ||
+            (doc.path.isNotBlank() && File(doc.path).exists() && File(doc.path).length() >= 4 && runCatching {
+                java.io.FileInputStream(File(doc.path)).use {
+                    it.read() == 0x25 && it.read() == 0x50 && it.read() == 0x44 && it.read() == 0x46
+                }
+            }.getOrDefault(false))
+
+        when {
+            isPdf -> {
+                val pdfDoc = activeDoc.copy(fileType = DocumentType.PDF, extension = "pdf")
+                navigateTo(Screen.PdfViewer(pdfDoc))
+            }
+            tab.fileType == DocumentFormat.PPT || doc.fileType == DocumentType.PPT -> navigateTo(Screen.PptViewer(activeDoc))
+            tab.fileType == DocumentFormat.IMAGE -> navigateTo(Screen.ImageViewer(activeDoc))
+            tab.fileType == DocumentFormat.EXCEL || tab.fileType == DocumentFormat.CSV || doc.fileType == DocumentType.EXCEL -> navigateTo(Screen.ExcelViewer(activeDoc))
             else -> navigateTo(Screen.TextViewer(activeDoc))
         }
     }

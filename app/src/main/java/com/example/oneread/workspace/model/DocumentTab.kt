@@ -55,11 +55,15 @@ data class DocumentTab(
         get() = if (filePath.isNotBlank()) File(filePath).exists() else true
 
     fun toDocumentItem(): DocumentItem {
+        val ext = originalFileName.substringAfterLast('.', "").lowercase().trim().ifBlank {
+            fileType.primaryExtension.lowercase().trim()
+        }
         return DocumentItem(
             id = documentItemId ?: id.hashCode().toLong(),
             uri = uriString,
             title = originalFileName.ifBlank { title },
             path = filePath,
+            extension = ext,
             fileType = fileType.toDocumentType(),
             pageCount = totalPages,
             lastReadPage = currentPage

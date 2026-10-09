@@ -46,11 +46,14 @@ object SecurityDetector {
     fun isPdfPasswordProtected(file: File, context: Context? = null): Boolean {
         if (!file.exists() || file.length() < 16) return false
 
-        // 1. Fast Native Android PdfRenderer check (throws SecurityException if password protected)
+        // 1. Authoritative Native Android PdfRenderer check
         try {
             ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)?.use { pfd ->
                 try {
-                    PdfRenderer(pfd).use { /* opened successfully -> not encrypted with user password */ }
+                    PdfRenderer(pfd).use {
+                        // Opened successfully -> not encrypted with user password
+                        return false
+                    }
                 } catch (e: SecurityException) {
                     return true
                 } catch (e: Exception) {
@@ -61,27 +64,12 @@ object SecurityDetector {
             }
         } catch (_: Exception) {}
 
-        // 2. Fast byte scan for /Encrypt dictionary in PDF trailer / xref table
-        try {
-            val length = file.length()
-            val scanLength = minOf(length, 8192L).toInt()
-            RandomAccessFile(file, "r").use { raf ->
-                raf.seek(maxOf(0L, length - scanLength))
-                val buffer = ByteArray(scanLength)
-                raf.readFully(buffer)
-                val trailerText = String(buffer, Charsets.ISO_8859_1)
-                if (trailerText.contains("/Encrypt")) {
-                    return true
-                }
-            }
-        } catch (_: Exception) {}
-
-        // 3. Fallback PDFBox check
+        // 2. Fallback PDFBox check: only protected if password exception is thrown or encrypted without user access
         if (context != null) {
             try {
                 PDFBoxResourceLoader.init(context.applicationContext)
                 val pdDoc = PDDocument.load(file)
-                val isEnc = pdDoc.isEncrypted
+                val isEnc = pdDoc.isEncrypted && pdDoc.currentAccessPermission?.isOwnerPermission == false
                 pdDoc.close()
                 if (isEnc) return true
             } catch (e: Exception) {

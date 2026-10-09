@@ -63,6 +63,8 @@ import androidx.compose.ui.unit.sp
 import com.example.oneread.workspace.model.DocumentTab
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -87,6 +89,7 @@ fun PdfViewerComponent(
 
     // File descriptor holder for cleanup
     var fileDescriptor by remember { mutableStateOf<ParcelFileDescriptor?>(null) }
+    val renderMutex = remember { Mutex() }
 
     // Page bitmaps cache (weak or simple memory cache)
     val pageBitmaps = remember { mutableStateOf<Map<Int, Bitmap>>(emptyMap()) }
@@ -131,17 +134,22 @@ fun PdfViewerComponent(
                     pageCount = pdfRenderer.pageCount
                     onUpdateTab(tab.copy(totalPages = pdfRenderer.pageCount))
 
-                    // Pre-render first 3 pages
+                    // Pre-render first 3 pages safely under renderMutex
                     val initialMap = mutableMapOf<Int, Bitmap>()
                     val pagesToRender = minOf(3, pdfRenderer.pageCount)
-                    for (i in 0 until pagesToRender) {
-                        pdfRenderer.openPage(i).use { page ->
-                            val width = (page.width * 1.5).toInt().coerceAtLeast(100)
-                            val height = (page.height * 1.5).toInt().coerceAtLeast(100)
-                            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                            bitmap.eraseColor(android.graphics.Color.WHITE)
-                            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                            initialMap[i] = bitmap
+                    renderMutex.withLock {
+                        for (i in 0 until pagesToRender) {
+                            try {
+                                pdfRenderer.openPage(i).use { page ->
+                                    val width = (page.width * 1.5).toInt().coerceAtLeast(100)
+                                    val height = (page.height * 1.5).toInt().coerceAtLeast(100)
+                                    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                                    val canvas = android.graphics.Canvas(bitmap)
+                                    canvas.drawColor(android.graphics.Color.WHITE)
+                                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                                    initialMap[i] = bitmap
+                                }
+                            } catch (_: Throwable) { }
                         }
                     }
                     pageBitmaps.value = initialMap
@@ -163,23 +171,27 @@ fun PdfViewerComponent(
         }
     }
 
-    // Function to load a specific page bitmap on demand
+    // Function to load a specific page bitmap on demand safely under mutex
     fun requestPageBitmap(pageIndex: Int) {
-        val r = renderer ?: return
         if (pageBitmaps.value.containsKey(pageIndex)) return
         scope.launch(Dispatchers.IO) {
-            try {
-                if (pageIndex in 0 until r.pageCount) {
-                    r.openPage(pageIndex).use { page ->
-                        val width = (page.width * 1.5).toInt().coerceAtLeast(100)
-                        val height = (page.height * 1.5).toInt().coerceAtLeast(100)
-                        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                        bitmap.eraseColor(android.graphics.Color.WHITE)
-                        page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                        pageBitmaps.value = pageBitmaps.value + (pageIndex to bitmap)
+            renderMutex.withLock {
+                if (pageBitmaps.value.containsKey(pageIndex)) return@withLock
+                val r = renderer ?: return@withLock
+                try {
+                    if (pageIndex in 0 until r.pageCount) {
+                        r.openPage(pageIndex).use { page ->
+                            val width = (page.width * 1.5).toInt().coerceAtLeast(100)
+                            val height = (page.height * 1.5).toInt().coerceAtLeast(100)
+                            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                            val canvas = android.graphics.Canvas(bitmap)
+                            canvas.drawColor(android.graphics.Color.WHITE)
+                            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                            pageBitmaps.value = pageBitmaps.value + (pageIndex to bitmap)
+                        }
                     }
-                }
-            } catch (_: Exception) { }
+                } catch (_: Throwable) { }
+            }
         }
     }
 

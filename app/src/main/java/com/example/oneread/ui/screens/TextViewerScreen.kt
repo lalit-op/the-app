@@ -1,10 +1,18 @@
 package com.example.oneread.ui.screens
 
+import android.app.Activity
+import android.content.Context
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.BackHandler
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,6 +26,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -32,11 +41,13 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.WrapText
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -50,8 +61,11 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.StayCurrentLandscape
+import androidx.compose.material.icons.filled.StayCurrentPortrait
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -67,6 +81,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -115,10 +130,165 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
-enum class TextReaderTheme(val label: String, val bg: Color, val text: Color, val cardBg: Color = bg) {
-    LIGHT("Day", Color(0xFFF8FAFC), Color(0xFF1E293B), Color(0xFFFFFFFF)),
-    SEPIA("Eye Care", Color(0xFFFBF0D9), Color(0xFF3F3B30), Color(0xFFF5E6CA)),
-    DARK("Night", Color(0xFF0F172A), Color(0xFFE2E8F0), Color(0xFF1E293B))
+enum class TextReaderTheme(
+    val id: String,
+    val label: String,
+    val bg: Color,
+    val text: Color,
+    val borderColor: Color,
+    val description: String,
+    val cardBg: Color = bg
+) {
+    WHITE(
+        id = "white",
+        label = "White",
+        bg = Color(0xFFFFFFFF),
+        text = Color(0xFF111827),
+        borderColor = Color(0xFFD1D5DB),
+        description = "Pure white background with dark text."
+    ),
+    LIGHT(
+        id = "light",
+        label = "Light",
+        bg = Color(0xFFF3F4F6),
+        text = Color(0xFF1F2937),
+        borderColor = Color(0xFFD1D5DB),
+        description = "Soft light grey background for comfortable reading."
+    ),
+    SEPIA(
+        id = "sepia",
+        label = "Yellow / Sepia",
+        bg = Color(0xFFFFF4CC),
+        text = Color(0xFF292524),
+        borderColor = Color(0xFFE7D8A5),
+        description = "Warm cream background to reduce the harshness of pure white."
+    ),
+    DARK(
+        id = "dark",
+        label = "Dark",
+        bg = Color(0xFF111827),
+        text = Color(0xFFF9FAFB),
+        borderColor = Color(0xFF374151),
+        description = "Dark background with readable light text."
+    );
+
+    companion object {
+        fun fromId(id: String?): TextReaderTheme {
+            return entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: DARK
+        }
+    }
+
+    fun nextTheme(): TextReaderTheme {
+        return when (this) {
+            WHITE -> LIGHT
+            LIGHT -> SEPIA
+            SEPIA -> DARK
+            DARK -> WHITE
+        }
+    }
+}
+
+@Composable
+fun TextThemeSelectionDialog(
+    currentTheme: TextReaderTheme,
+    onSelectTheme: (TextReaderTheme) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Reading Theme",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+        },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                TextReaderTheme.entries.forEach { theme ->
+                    val isSelected = theme == currentTheme
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isSelected) Color(0xFF1E293B) else Color(0xFF0F172A),
+                        border = BorderStroke(
+                            width = if (isSelected) 2.dp else 1.dp,
+                            color = if (isSelected) Color(0xFF38BDF8) else Color(0xFF334155)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("theme_option_${theme.id}")
+                            .clickable {
+                                onSelectTheme(theme)
+                                onDismiss()
+                            }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .padding(12.dp)
+                                .fillMaxWidth()
+                        ) {
+                            // 48px Color Preview Swatch with Border
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .background(theme.bg, RoundedCornerShape(8.dp))
+                                    .border(BorderStroke(1.dp, theme.borderColor), RoundedCornerShape(8.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "Aa",
+                                    color = theme.text,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(14.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = theme.label,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp,
+                                        color = Color.White
+                                    )
+                                    if (isSelected) {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Selected",
+                                            tint = Color(0xFF38BDF8),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = theme.description,
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF94A3B8)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.testTag("theme_dialog_close")
+            ) {
+                Text("Close", color = Color(0xFF38BDF8))
+            }
+        },
+        containerColor = Color(0xFF0F172A),
+        shape = RoundedCornerShape(16.dp)
+    )
 }
 
 @Composable
@@ -147,16 +317,30 @@ fun TextViewerScreen(
     var onSearchNext by remember { mutableStateOf<(() -> Unit)?>(null) }
     var onSearchPrev by remember { mutableStateOf<(() -> Unit)?>(null) }
 
-    // Fullscreen state (Standard HR Read Fullscreen Architecture)
+    // Settings persistence (SharedPreferences for Text Reader)
+    val prefs = remember(context) {
+        context.getSharedPreferences("hr_read_text_prefs", Context.MODE_PRIVATE)
+    }
+
+    // Fullscreen state (Reading-focused immersive mode)
     var isFullscreen by remember { mutableStateOf(false) }
 
-    // Plain text viewer configuration states (accessible via header menu)
-    var currentTheme by remember { mutableStateOf(TextReaderTheme.DARK) }
-    var fontSize by remember { mutableFloatStateOf(14f) }
-    var isWordWrap by remember { mutableStateOf(false) }
-    var showLineNumbers by remember { mutableStateOf(false) }
+    // Plain text viewer configuration states (persisted across sessions and files)
+    var currentTheme by remember {
+        mutableStateOf(TextReaderTheme.fromId(prefs.getString("pref_text_theme", TextReaderTheme.DARK.id)))
+    }
+    var fontSize by remember {
+        mutableFloatStateOf(prefs.getFloat("pref_text_font_size", 14f))
+    }
+    var isWordWrap by remember {
+        mutableStateOf(prefs.getBoolean("pref_text_word_wrap", true))
+    }
+    var showLineNumbers by remember {
+        mutableStateOf(prefs.getBoolean("pref_text_line_numbers", false))
+    }
 
     // Dialog states
+    var showThemeDialog by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var showInfoDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -165,6 +349,22 @@ fun TextViewerScreen(
     var isUnlocked by remember { mutableStateOf(!liveDocument.isPasswordProtected) }
     var showPasswordDialog by remember { mutableStateOf(liveDocument.isPasswordProtected) }
     var passwordError by remember { mutableStateOf<String?>(null) }
+
+    val activity = context as? Activity
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    // Restore orientation and system bars safely when leaving screen or on disposal
+    DisposableEffect(Unit) {
+        onDispose {
+            val window = (context as? Activity)?.window
+            if (window != null) {
+                val controller = WindowCompat.getInsetsController(window, window.decorView)
+                controller.show(WindowInsetsCompat.Type.systemBars())
+            }
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
 
     // Back handling: close search first, then exit fullscreen, then onBack
     BackHandler {
@@ -179,10 +379,17 @@ fun TextViewerScreen(
         }
     }
 
+    val isPlainTextFormat = liveDocument.fileType == DocumentType.TXT ||
+        (liveDocument.fileType != DocumentType.PDF &&
+         liveDocument.fileType != DocumentType.EXCEL &&
+         liveDocument.fileType != DocumentType.WORD &&
+         liveDocument.fileType != DocumentType.PPT)
+
     // Common Viewer Shell & Master Edge-to-Edge Header architecture
     HRReadViewerShell(
         modifier = modifier,
         isFullscreen = isFullscreen,
+        backgroundColor = if (isPlainTextFormat) currentTheme.bg else Color(0xFF0F172A),
         header = {
             CommonViewerHeader(
                 title = liveDocument.title,
@@ -218,12 +425,24 @@ fun TextViewerScreen(
                 onDocumentSwitcherClick = { viewModel.openSwitcherSheet() },
                 customActions = {
                     IconButton(
-                        onClick = { isFullscreen = !isFullscreen },
-                        modifier = Modifier.testTag("text_viewer_fullscreen_button")
+                        onClick = {
+                            if (activity != null) {
+                                val targetOrientation = if (isLandscape) {
+                                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                                } else {
+                                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                                }
+                                runCatching {
+                                    activity.requestedOrientation = targetOrientation
+                                    prefs.edit().putInt("pref_text_orientation", targetOrientation).apply()
+                                }
+                            }
+                        },
+                        modifier = Modifier.testTag("text_viewer_landscape_button")
                     ) {
                         Icon(
-                            imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                            contentDescription = if (isFullscreen) "Exit Fullscreen" else "Fullscreen",
+                            imageVector = if (isLandscape) Icons.Default.StayCurrentPortrait else Icons.Default.StayCurrentLandscape,
+                            contentDescription = if (isLandscape) "Switch to Portrait" else "Switch to Landscape",
                             tint = Color.White
                         )
                     }
@@ -245,18 +464,14 @@ fun TextViewerScreen(
                         modifier = Modifier.testTag("menu_fullscreen")
                     )
 
-                    if (liveDocument.fileType == DocumentType.TXT) {
-                        // Theme Toggle
+                    if (isPlainTextFormat) {
+                        // Theme Selector Dialog
                         DropdownMenuItem(
-                            text = { Text("Theme: ${currentTheme.label}") },
+                            text = { Text("Reading Theme: ${currentTheme.label}") },
                             leadingIcon = { Icon(Icons.Default.ColorLens, contentDescription = null) },
                             onClick = {
                                 onDismiss()
-                                currentTheme = when (currentTheme) {
-                                    TextReaderTheme.DARK -> TextReaderTheme.LIGHT
-                                    TextReaderTheme.LIGHT -> TextReaderTheme.SEPIA
-                                    TextReaderTheme.SEPIA -> TextReaderTheme.DARK
-                                }
+                                showThemeDialog = true
                             },
                             modifier = Modifier.testTag("menu_theme")
                         )
@@ -267,20 +482,37 @@ fun TextViewerScreen(
                             leadingIcon = { Icon(Icons.Default.FormatLineSpacing, contentDescription = null) },
                             onClick = {
                                 onDismiss()
-                                fontSize = if (fontSize >= 20f) 12f else fontSize + 2f
+                                val newSize = if (fontSize >= 20f) 12f else fontSize + 2f
+                                fontSize = newSize
+                                prefs.edit().putFloat("pref_text_font_size", newSize).apply()
                             },
                             modifier = Modifier.testTag("menu_font_size")
                         )
 
-                        // Word Wrap Toggle (Default off for ASCII & Code integrity)
+                        // Word Wrap Toggle (Default on for readability & no cut-off)
                         DropdownMenuItem(
                             text = { Text(if (isWordWrap) "Disable word wrap" else "Enable word wrap") },
                             leadingIcon = { Icon(Icons.AutoMirrored.Filled.WrapText, contentDescription = null) },
                             onClick = {
                                 onDismiss()
-                                isWordWrap = !isWordWrap
+                                val newWrap = !isWordWrap
+                                isWordWrap = newWrap
+                                prefs.edit().putBoolean("pref_text_word_wrap", newWrap).apply()
                             },
                             modifier = Modifier.testTag("menu_word_wrap")
+                        )
+
+                        // Line numbers toggle
+                        DropdownMenuItem(
+                            text = { Text(if (showLineNumbers) "Hide line numbers" else "Show line numbers") },
+                            leadingIcon = { Icon(Icons.Default.FormatListNumbered, contentDescription = null) },
+                            onClick = {
+                                onDismiss()
+                                val newLn = !showLineNumbers
+                                showLineNumbers = newLn
+                                prefs.edit().putBoolean("pref_text_line_numbers", newLn).apply()
+                            },
+                            modifier = Modifier.testTag("menu_line_numbers")
                         )
                     }
 
@@ -395,6 +627,16 @@ fun TextViewerScreen(
                         )
                     }
                 }
+            }
+            if (showThemeDialog) {
+                TextThemeSelectionDialog(
+                    currentTheme = currentTheme,
+                    onSelectTheme = { selected ->
+                        currentTheme = selected
+                        prefs.edit().putString("pref_text_theme", selected.id).apply()
+                    },
+                    onDismiss = { showThemeDialog = false }
+                )
             }
             if (showRenameDialog) {
                 RenameDialog(
@@ -520,49 +762,66 @@ fun TextViewerScreen(
         Box(
             modifier = Modifier.fillMaxSize()
         ) {
-            if (!isUnlocked) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(top = topBarPadding),
-                    contentAlignment = Alignment.Center
+        val isPdfDocument = liveDocument.fileType == DocumentType.PDF ||
+            liveDocument.title.endsWith(".pdf", ignoreCase = true) ||
+            liveDocument.extension.equals("pdf", ignoreCase = true) ||
+            liveDocument.path.endsWith(".pdf", ignoreCase = true) ||
+            liveDocument.uri.contains(".pdf", ignoreCase = true) ||
+            (liveDocument.path.isNotBlank() && File(liveDocument.path).exists() && File(liveDocument.path).length() >= 4 && runCatching {
+                java.io.FileInputStream(File(liveDocument.path)).use {
+                    it.read() == 0x25 && it.read() == 0x50 && it.read() == 0x44 && it.read() == 0x46
+                }
+            }.getOrDefault(false))
+
+        if (isPdfDocument) {
+            PdfViewerScreen(
+                document = liveDocument.copy(fileType = DocumentType.PDF, extension = "pdf"),
+                viewModel = viewModel,
+                onBack = onBack
+            )
+        } else if (!isUnlocked) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = topBarPadding),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.padding(24.dp)
                 ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                        modifier = Modifier.padding(24.dp)
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = null,
+                        tint = Color(0xFFFACC15),
+                        modifier = Modifier.size(56.dp)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "Document is Protected",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Password is required to view this file.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFF94A3B8)
+                    )
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Button(
+                        onClick = { showPasswordDialog = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB))
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = null,
-                            tint = Color(0xFFFACC15),
-                            modifier = Modifier.size(56.dp)
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "Document is Protected",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Password is required to view this file.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color(0xFF94A3B8)
-                        )
-                        Spacer(modifier = Modifier.height(20.dp))
-                        Button(
-                            onClick = { showPasswordDialog = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB))
-                        ) {
-                            Text("Enter Password")
-                        }
+                        Text("Enter Password")
                     }
                 }
-            } else {
-                when (liveDocument.fileType) {
-                    DocumentType.EXCEL -> {
+            }
+        } else {
+            when {
+                liveDocument.fileType == DocumentType.EXCEL -> {
                         ExcelSpreadsheetRenderer(
                             document = liveDocument,
                             searchQuery = searchQuery,
@@ -571,7 +830,7 @@ fun TextViewerScreen(
                                 .padding(top = 56.dp)
                         )
                     }
-                    DocumentType.WORD -> {
+                    liveDocument.fileType == DocumentType.WORD -> {
                         WordDocumentRenderer(
                             document = liveDocument,
                             searchQuery = searchQuery,
@@ -580,7 +839,7 @@ fun TextViewerScreen(
                                 .padding(top = 56.dp)
                         )
                     }
-                    DocumentType.PPT -> {
+                    liveDocument.fileType == DocumentType.PPT -> {
                         PptViewerScreen(
                             document = liveDocument,
                             viewModel = viewModel,
@@ -591,6 +850,7 @@ fun TextViewerScreen(
                         PlainDocumentRenderer(
                             document = liveDocument,
                             searchQuery = searchQuery,
+                            isSearchActive = isSearchActive,
                             currentMatchIndex = currentMatchIndex,
                             onMatchIndexChange = { currentMatchIndex = it },
                             onMatchCountChange = { searchMatchCount = it },
@@ -963,13 +1223,14 @@ private fun expandTabs(text: String, tabSize: Int = 4): String {
 private fun PlainDocumentRenderer(
     document: DocumentItem,
     searchQuery: String,
+    isSearchActive: Boolean = false,
     currentMatchIndex: Int = -1,
     onMatchIndexChange: (Int) -> Unit = {},
     onMatchCountChange: (Int) -> Unit = {},
     registerSearchNavigators: (onNext: () -> Unit, onPrev: () -> Unit) -> Unit = { _, _ -> },
     fontSize: Float = 14f,
     currentTheme: TextReaderTheme = TextReaderTheme.DARK,
-    isWordWrap: Boolean = false,
+    isWordWrap: Boolean = true,
     showLineNumbers: Boolean = false,
     topPadding: androidx.compose.ui.unit.Dp = 0.dp,
     onToggleFullscreen: () -> Unit = {},
@@ -985,6 +1246,31 @@ private fun PlainDocumentRenderer(
         withContext(Dispatchers.IO) {
             try {
                 val file = File(document.path)
+                val isPdfFile = document.fileType == DocumentType.PDF ||
+                    document.title.endsWith(".pdf", ignoreCase = true) ||
+                    document.extension.equals("pdf", ignoreCase = true) ||
+                    document.mimeType.contains("pdf", ignoreCase = true) ||
+                    (file.exists() && file.length() >= 4 && (runCatching {
+                        java.io.FileInputStream(file).use { input ->
+                            val header = ByteArray(4)
+                            val read = input.read(header)
+                            read >= 4 && header[0] == 0x25.toByte() && header[1] == 0x50.toByte() && header[2] == 0x44.toByte() && header[3] == 0x46.toByte()
+                        }
+                    }.getOrNull() == true)) ||
+                    (document.uri.isNotBlank() && (runCatching {
+                        context.contentResolver.openInputStream(Uri.parse(document.uri))?.use { input ->
+                            val header = ByteArray(4)
+                            val read = input.read(header)
+                            read >= 4 && header[0] == 0x25.toByte() && header[1] == 0x50.toByte() && header[2] == 0x44.toByte() && header[3] == 0x46.toByte()
+                        }
+                    }.getOrNull() == true))
+
+                if (isPdfFile) {
+                    lines = listOf("PDF document detected. Dedicated PDF viewer should be used to display this document.")
+                    isLoading = false
+                    return@withContext
+                }
+
                 val rawText: String = if (file.exists() && file.canRead()) {
                     runCatching { file.readText(Charsets.UTF_8) }.getOrElse {
                         runCatching { file.readText(Charsets.ISO_8859_1) }.getOrElse { "" }
@@ -1092,97 +1378,117 @@ private fun PlainDocumentRenderer(
 
     val horizontalScrollState = rememberScrollState()
 
+    // High contrast search highlight colors for all themes
+    val searchHighlightBg = remember(currentTheme) {
+        when (currentTheme) {
+            TextReaderTheme.DARK -> Color(0xFFFACC15) // Bright amber yellow
+            TextReaderTheme.SEPIA -> Color(0xFFF59E0B) // Amber 500
+            TextReaderTheme.LIGHT -> Color(0xFFFDE047) // Yellow 300
+            TextReaderTheme.WHITE -> Color(0xFFFACC15) // Bright amber
+        }
+    }
+    val searchHighlightTextColor = Color(0xFF0F172A)
+
     // STATUS BAR -> SINGLE HR READ VIEWER HEADER -> TXT CONTENT
-    // NO secondary bar! TXT content rendered directly in standard editor layout.
+    // Single tap toggles immersive fullscreen, scroll and selection are preserved
     Box(
         modifier = modifier
             .background(currentTheme.bg)
             .fillMaxSize()
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onDoubleTap = { onToggleFullscreen() }
-                )
+            .testTag("text_viewer_reading_area")
+            .pointerInput(isSearchActive) {
+                if (!isSearchActive) {
+                    detectTapGestures(
+                        onTap = { onToggleFullscreen() }
+                    )
+                }
             }
             .then(if (!isWordWrap) Modifier.horizontalScroll(horizontalScrollState) else Modifier)
     ) {
-        LazyColumn(
-            state = lazyListState,
-            modifier = Modifier
-                .fillMaxHeight()
-                .then(
-                    if (!isWordWrap) {
-                        Modifier.width(calculatedContentWidthDp.coerceAtLeast(screenWidthDp))
-                    } else {
-                        Modifier.fillMaxWidth()
-                    }
-                ),
-            contentPadding = PaddingValues(
-                start = 12.dp,
-                end = 16.dp,
-                top = topPadding + 8.dp,
-                bottom = 32.dp
-            )
+        SelectionContainer(
+            modifier = Modifier.fillMaxSize()
         ) {
-            itemsIndexed(lines, key = { index, _ -> index }) { index, rawLine ->
-                val displayLine = remember(rawLine) { expandTabs(rawLine, 4) }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (showLineNumbers) {
+            LazyColumn(
+                state = lazyListState,
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .then(
+                        if (!isWordWrap) {
+                            Modifier.width(calculatedContentWidthDp.coerceAtLeast(screenWidthDp))
+                        } else {
+                            Modifier.fillMaxWidth()
+                        }
+                    ),
+                contentPadding = PaddingValues(
+                    start = 12.dp,
+                    end = 16.dp,
+                    top = topPadding + 8.dp,
+                    bottom = 32.dp
+                )
+            ) {
+                itemsIndexed(lines, key = { index, _ -> index }) { index, rawLine ->
+                    val displayLine = remember(rawLine) { expandTabs(rawLine, 4) }
+                    Row(
+                        verticalAlignment = Alignment.Top,
+                        modifier = if (isWordWrap) Modifier.fillMaxWidth() else Modifier
+                    ) {
+                        if (showLineNumbers) {
+                            Text(
+                                text = "${index + 1}".padStart(gutterDigits, ' '),
+                                color = currentTheme.text.copy(alpha = 0.35f),
+                                fontSize = fontSize.sp,
+                                lineHeight = (fontSize * 1.4f).sp,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 0.sp,
+                                softWrap = false,
+                                modifier = Modifier.width(gutterWidthDp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+
+                        val annotatedLine = remember(displayLine, searchQuery, currentTheme) {
+                            if (searchQuery.isNotBlank() && displayLine.contains(searchQuery, ignoreCase = true)) {
+                                buildAnnotatedString {
+                                    var currentIdx = 0
+                                    val lowerLine = displayLine.lowercase()
+                                    val lowerQuery = searchQuery.lowercase()
+                                    while (currentIdx < displayLine.length) {
+                                        val matchIdx = lowerLine.indexOf(lowerQuery, currentIdx)
+                                        if (matchIdx == -1) {
+                                            append(displayLine.substring(currentIdx))
+                                            break
+                                        }
+                                        append(displayLine.substring(currentIdx, matchIdx))
+                                        withStyle(
+                                            SpanStyle(
+                                                background = searchHighlightBg,
+                                                color = searchHighlightTextColor,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        ) {
+                                            append(displayLine.substring(matchIdx, matchIdx + searchQuery.length))
+                                        }
+                                        currentIdx = matchIdx + searchQuery.length
+                                    }
+                                }
+                            } else {
+                                buildAnnotatedString { append(displayLine) }
+                            }
+                        }
+
+                        // Preserve empty newlines: if text is empty, display a non-breaking space with minLines=1
                         Text(
-                            text = "${index + 1}".padStart(gutterDigits, ' '),
-                            color = currentTheme.text.copy(alpha = 0.35f),
+                            text = if (annotatedLine.isEmpty()) buildAnnotatedString { append(" ") } else annotatedLine,
+                            color = currentTheme.text,
                             fontSize = fontSize.sp,
-                            lineHeight = (fontSize * 1.35f).sp,
+                            lineHeight = (fontSize * 1.4f).sp,
                             fontFamily = FontFamily.Monospace,
                             letterSpacing = 0.sp,
-                            softWrap = false,
-                            modifier = Modifier.width(gutterWidthDp)
+                            softWrap = isWordWrap,
+                            modifier = if (isWordWrap) Modifier.weight(1f) else Modifier,
+                            minLines = 1
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
                     }
-
-                    val annotatedLine = remember(displayLine, searchQuery) {
-                        if (searchQuery.isNotBlank() && displayLine.contains(searchQuery, ignoreCase = true)) {
-                            buildAnnotatedString {
-                                var currentIdx = 0
-                                val lowerLine = displayLine.lowercase()
-                                val lowerQuery = searchQuery.lowercase()
-                                while (currentIdx < displayLine.length) {
-                                    val matchIdx = lowerLine.indexOf(lowerQuery, currentIdx)
-                                    if (matchIdx == -1) {
-                                        append(displayLine.substring(currentIdx))
-                                        break
-                                    }
-                                    append(displayLine.substring(currentIdx, matchIdx))
-                                    withStyle(
-                                        SpanStyle(
-                                            background = Color(0xFFFACC15),
-                                            color = Color(0xFF0F172A),
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    ) {
-                                        append(displayLine.substring(matchIdx, matchIdx + searchQuery.length))
-                                    }
-                                    currentIdx = matchIdx + searchQuery.length
-                                }
-                            }
-                        } else {
-                            buildAnnotatedString { append(displayLine) }
-                        }
-                    }
-
-                    // Preserve empty newlines: if text is empty, display a non-breaking space with minLines=1
-                    Text(
-                        text = if (annotatedLine.isEmpty()) buildAnnotatedString { append(" ") } else annotatedLine,
-                        color = currentTheme.text,
-                        fontSize = fontSize.sp,
-                        lineHeight = (fontSize * 1.35f).sp,
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = 0.sp,
-                        softWrap = isWordWrap,
-                        minLines = 1
-                    )
                 }
             }
         }
