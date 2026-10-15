@@ -1,5 +1,9 @@
 package com.example.oneread.word.ui
 
+import android.net.Uri
+import java.io.FileOutputStream
+import java.util.zip.ZipFile
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -58,6 +62,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
@@ -99,6 +104,7 @@ fun WordDocumentRenderer(
     registerSearchNavigators: (onNext: () -> Unit, onPrev: () -> Unit) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     var isLoading by remember { mutableStateOf(true) }
     var parsedDoc by remember { mutableStateOf<DocxDocument?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -109,19 +115,49 @@ fun WordDocumentRenderer(
     var offsetY by remember { mutableFloatStateOf(0f) }
     val scrollState = rememberScrollState()
 
-    LaunchedEffect(document.path, document.uri) {
+    LaunchedEffect(document.path, document.uri, document.extension, document.title) {
         withContext(Dispatchers.IO) {
             try {
                 isLoading = true
-                val file = File(document.path)
-                if (file.exists() && file.canRead()) {
-                    val result = DocxParser.parse(file)
-                    parsedDoc = result
+                errorMessage = null
+                val extension = document.extension.substringAfterLast('.', "")
+                    .ifBlank { document.title.substringAfterLast('.', "") }
+                    .lowercase()
+                val source = File(document.path)
+                val file = if (source.isFile && source.canRead()) {
+                    source
+                } else if (document.uri.isNotBlank()) {
+                    val safeExt = extension.ifBlank { "docx" }
+                    val cached = File(context.cacheDir, "word_render_${document.id}.$safeExt")
+                    val copied = context.contentResolver.openInputStream(Uri.parse(document.uri))?.use { input ->
+                        FileOutputStream(cached).use { output -> input.copyTo(output) }
+                        true
+                    } ?: false
+                    if (copied && cached.isFile && cached.length() > 0) cached else null
+                } else null
+
+                if (file == null) {
+                    errorMessage = "Unable to access the selected Word document."
+                } else if (file.extension.lowercase() !in setOf("docx", "docm", "dotx", "dotm", "rtf")) {
+                    errorMessage = "This reader supports DOCX and RTF files. Convert legacy DOC/ODT files to DOCX or PDF to view them."
                 } else {
-                    errorMessage = "Unable to read document file."
+                    // Reject invalid OOXML files before invoking the parser, so ZIP bytes
+                    // are never shown as if they were document text.
+                    if (file.extension.lowercase() != "rtf") {
+                        val validPackage = runCatching {
+                            ZipFile(file).use { it.getEntry("word/document.xml") != null }
+                        }.getOrDefault(false)
+                        if (!validPackage) throw IllegalArgumentException("The file is not a valid Word OpenXML document.")
+                    }
+                    val result = DocxParser.parse(file)
+                    if (result.isEmpty) {
+                        errorMessage = "The Word document contains no readable content."
+                    } else {
+                        parsedDoc = result
+                    }
                 }
             } catch (e: Exception) {
-                errorMessage = "Error opening Word document: ${e.message}"
+                errorMessage = "Error opening Word document: ${e.message ?: "Unsupported or corrupted file"}"
             } finally {
                 isLoading = false
             }
@@ -413,7 +449,7 @@ fun WordDocumentRenderer(
  * Renders an individual DocxBlock: Paragraph, Table, Image, or Divider.
  */
 @Composable
-private fun RenderDocxBlock(
+internal fun RenderDocxBlock(
     block: DocxBlock,
     searchQuery: String,
     isHeader: Boolean = false
