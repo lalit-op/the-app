@@ -118,13 +118,16 @@ fun PptViewerScreen(
     // View mode: Normal, Slide Sorter, Presentation
     var viewMode by remember { mutableStateOf(PptViewMode.NORMAL) }
     var fitMode by remember { mutableStateOf(PptFitMode.FIT_SCREEN) }
-    var showThumbnailStrip by remember { mutableStateOf(true) }
     val initialTabZoom = viewModel.tabManager.activeTab?.zoomLevel ?: 1.0f
     // Continuous mode mirrors document readers: fit each slide to the viewport width
     // and let the reader scroll vertically through the entire deck by default.
     // Preserve single-slide mode when the user previously saved a zoom above 100%.
     var continuousScrollMode by remember(liveDocument.id) {
         mutableStateOf(initialTabZoom <= 1.0f)
+    }
+    // A full-height continuous reader needs no separate thumbnail strip by default.
+    var showThumbnailStrip by remember(liveDocument.id) {
+        mutableStateOf(initialTabZoom > 1.0f)
     }
 
     // Search state
@@ -922,7 +925,7 @@ fun PptViewerScreen(
                             }
 
                             // Slide Nav Chevron (Left)
-                            if (pagerState.currentPage > 0 && !isFullscreen) {
+                            if (!continuousScrollMode && pagerState.currentPage > 0 && !isFullscreen) {
                                 IconButton(
                                     onClick = {
                                         navigateToSlide(pagerState.currentPage - 1)
@@ -939,7 +942,7 @@ fun PptViewerScreen(
                             }
 
                             // Slide Nav Chevron (Right)
-                            if (pagerState.currentPage < totalSlides - 1 && !isFullscreen) {
+                            if (!continuousScrollMode && pagerState.currentPage < totalSlides - 1 && !isFullscreen) {
                                 IconButton(
                                     onClick = {
                                         navigateToSlide(pagerState.currentPage + 1)
@@ -1152,6 +1155,21 @@ fun PptViewerScreen(
                                     modifier = Modifier.testTag("menu_slide_sorter")
                                 )
                                 DropdownMenuItem(
+                                    text = { Text(if (isFullscreen) "Exit Fullscreen" else "Enter Fullscreen") },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                                            contentDescription = null,
+                                            tint = Color(0xFF38BDF8)
+                                        )
+                                    },
+                                    onClick = {
+                                        onDismiss()
+                                        isFullscreen = !isFullscreen
+                                    },
+                                    modifier = Modifier.testTag("menu_toggle_fullscreen")
+                                )
+                                DropdownMenuItem(
                                     text = { Text(if (continuousScrollMode) "Use Single-Slide View" else "Use Continuous Scroll") },
                                     leadingIcon = {
                                         Icon(
@@ -1164,10 +1182,12 @@ fun PptViewerScreen(
                                         onDismiss()
                                         if (continuousScrollMode) {
                                             continuousScrollMode = false
+                                            showThumbnailStrip = true
                                         } else {
                                             setZoom(1.0f)
                                             offset = Offset.Zero
                                             continuousScrollMode = true
+                                            showThumbnailStrip = false
                                         }
                                     },
                                     modifier = Modifier.testTag("menu_toggle_continuous_scroll")
