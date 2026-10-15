@@ -239,6 +239,39 @@ class PptParserAndRenderingTest {
     }
 
     @Test
+    fun testTitlePlaceholderUsesReadableFallbackFontWhenMasterStylesAreAbsent() {
+        val presXml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+                <p:sldSz cx="12192000" cy="6858000"/>
+                <p:sldIdLst>
+                    <p:sldId id="1" r:id="rId1" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>
+                </p:sldIdLst>
+            </p:presentation>"""
+        val slideXml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                   xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                <p:cSld><p:spTree>
+                    <p:sp>
+                        <p:nvSpPr>
+                            <p:cNvPr id="2" name="Title 1"/>
+                            <p:cNvSpPr/>
+                            <p:nvPr><p:ph type="title"/></p:nvPr>
+                        </p:nvSpPr>
+                        <p:spPr><a:xfrm><a:off x="1000000" y="500000"/><a:ext cx="9000000" cy="1500000"/></a:xfrm></p:spPr>
+                        <p:txBody><a:bodyPr/><a:lstStyle/><a:p>
+                            <a:r><a:rPr lang="en-US"/><a:t>Outline</a:t></a:r>
+                        </a:p></p:txBody>
+                    </p:sp>
+                </p:spTree></p:cSld>
+            </p:sld>"""
+        val file = createSamplePptx(presXml, mapOf("slides/slide1.xml" to slideXml))
+        val run = PptxParser.parse(file).slides.single().elements.filterIsInstance<TextElement>()
+            .single().paragraphs.single().runs.single()
+
+        assertEquals(28f, run.fontSizePt, 0.01f)
+    }
+
+    @Test
     fun testBracketsAndDiamondGeometryTypes() {
         val presXml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
             <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
