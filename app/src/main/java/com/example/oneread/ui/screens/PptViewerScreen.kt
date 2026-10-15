@@ -301,7 +301,10 @@ fun PptViewerScreen(
     // render cache when the query changes so a cached unhighlighted slide cannot
     // mask a new search result.
     LaunchedEffect(searchQuery, presentation) {
-        slideBitmapCache.values.forEach { if (!it.isRecycled) it.recycle() }
+        // Do not recycle immediately: currently composed Image nodes may still hold
+        // the old bitmap for one frame while their LaunchedEffect renders highlights.
+        // Clearing the cache forces new renders; obsolete uncached bitmaps become
+        // collectible after the visible items adopt the replacements.
         slideBitmapCache.clear()
     }
 
@@ -418,9 +421,16 @@ fun PptViewerScreen(
         )
         slideBitmapCache[slideIndex] = bmp
 
-        // Evict distant slides if cache exceeds 8 full-resolution slides
+        // Keep memory bounded around the currently visible slide. In continuous
+        // reading mode the list's visible item is authoritative; pagerState is only
+        // synchronized after a scroll-state update and can briefly lag behind.
+        val focusIndex = if (viewMode == PptViewMode.NORMAL && continuousScrollMode) {
+            slideListState.firstVisibleItemIndex
+        } else {
+            pagerState.currentPage
+        }
         if (slideBitmapCache.size > 8) {
-            val toRemove = slideBitmapCache.keys.filter { kotlin.math.abs(it - pagerState.currentPage) > 2 }
+            val toRemove = slideBitmapCache.keys.filter { kotlin.math.abs(it - focusIndex) > 2 }
             toRemove.forEach { k ->
                 slideBitmapCache.remove(k)?.recycle()
             }
