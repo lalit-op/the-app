@@ -70,11 +70,17 @@ fun ExcelViewerComponent(
         withContext(Dispatchers.IO) {
             try {
                 isLoading = true
-                val sourceExtension = sequenceOf(
-                    tab.filePath.substringAfterLast('.', ""),
-                    tab.title.substringAfterLast('.', ""),
-                    Uri.parse(tab.uriString.ifBlank { "content://unknown/file.xlsx" }).lastPathSegment.orEmpty().substringAfterLast('.', "")
-                ).firstOrNull { it.isNotBlank() }?.lowercase() ?: "xlsx"
+                val uriFileName = tab.uriString.takeIf { it.isNotBlank() }
+                    ?.let { Uri.parse(it).lastPathSegment }
+                    .orEmpty()
+                val sourceFileName = tab.originalFileName.ifBlank {
+                    uriFileName.ifBlank { tab.title }
+                }
+                val sourceExtension = sourceFileName.substringAfterLast('.', "")
+                    .ifBlank { tab.displayExtension }
+                    .lowercase()
+                    .removePrefix(".")
+                    .ifBlank { "xlsx" }
 
                 var targetFile = if (tab.filePath.isNotBlank()) File(tab.filePath) else null
                 if (targetFile == null || !targetFile.exists()) {
@@ -383,51 +389,4 @@ private fun getColumnLetter(index: Int): String {
         num = (num / 26) - 1
     }
     return letter
-}
-
-private fun parseXlsxSheets(file: File): List<List<List<String>>> {
-    return runCatching {
-        val zip = ZipFile(file)
-        val sharedStrings = mutableListOf<String>()
-        val sstEntry = zip.getEntry("xl/sharedStrings.xml")
-        if (sstEntry != null) {
-            val sstXml = zip.getInputStream(sstEntry).bufferedReader().use { it.readText() }
-            val tRegex = Regex("<t[ >](.*?)</t>", RegexOption.DOT_MATCHES_ALL)
-            for (match in tRegex.findAll(sstXml)) {
-                sharedStrings.add(match.groupValues[1])
-            }
-        }
-
-        val allSheets = mutableListOf<List<List<String>>>()
-
-        // Check for multiple sheets (sheet1, sheet2, sheet3...)
-        for (sheetNum in 1..10) {
-            val sheetEntry = zip.getEntry("xl/worksheets/sheet$sheetNum.xml") ?: break
-            val sheetXml = zip.getInputStream(sheetEntry).bufferedReader().use { it.readText() }
-            val rowRegex = Regex("<row[ >](.*?)</row>", RegexOption.DOT_MATCHES_ALL)
-            val cellRegex = Regex("<c [^>]*?t=\"([^\"]*)\"[^>]*?>(.*?)</c>|<c [^>]*?>(.*?)</c>", RegexOption.DOT_MATCHES_ALL)
-            val valRegex = Regex("<v>(.*?)</v>")
-            val rows = mutableListOf<List<String>>()
-
-            for (rowMatch in rowRegex.findAll(sheetXml)) {
-                val rowCells = mutableListOf<String>()
-                for (cellMatch in cellRegex.findAll(rowMatch.value)) {
-                    val isShared = cellMatch.value.contains("t=\"s\"")
-                    val vMatch = valRegex.find(cellMatch.value)
-                    val rawVal = vMatch?.groupValues?.get(1) ?: ""
-                    val cellText = if (isShared) {
-                        val idx = rawVal.toIntOrNull()
-                        if (idx != null && idx in sharedStrings.indices) sharedStrings[idx] else rawVal
-                    } else {
-                        rawVal
-                    }
-                    rowCells.add(cellText)
-                }
-                if (rowCells.isNotEmpty()) rows.add(rowCells)
-            }
-            if (rows.isNotEmpty()) allSheets.add(rows)
-        }
-        zip.close()
-        allSheets
-    }.getOrElse { emptyList() }
 }
