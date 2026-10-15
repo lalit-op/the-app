@@ -320,4 +320,47 @@ class PptParserAndRenderingTest {
         assertEquals(1, pres.slides.size)
         assertEquals(0, pres.slides[0].elements.size)
     }
+    @Test
+    fun textRunsInheritPowerPointParagraphDefaultFontSize() {
+        val presXml = """<?xml version="1.0" encoding="UTF-8"?>
+            <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <p:sldSz cx="12192000" cy="6858000"/>
+              <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
+            </p:presentation>"""
+        val slideXml = """<?xml version="1.0" encoding="UTF-8"?>
+            <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                   xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <p:cSld><p:spTree>
+                <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+                <p:grpSpPr/>
+                <p:sp>
+                  <p:nvSpPr><p:cNvPr id="2" name="Title 1"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+                  <p:spPr>
+                    <a:xfrm><a:off x="1000000" y="500000"/><a:ext cx="10000000" cy="1200000"/></a:xfrm>
+                    <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+                  </p:spPr>
+                  <p:txBody>
+                    <a:bodyPr/><a:lstStyle/>
+                    <a:p>
+                      <a:pPr><a:defRPr sz="3600"><a:solidFill><a:srgbClr val="112233"/></a:solidFill></a:defRPr></a:pPr>
+                      <a:r><a:t>Large heading</a:t></a:r>
+                      <a:endParaRPr sz="3600"/>
+                    </a:p>
+                  </p:txBody>
+                </p:sp>
+              </p:spTree></p:cSld>
+            </p:sld>"""
+
+        val file = createSamplePptx(presXml, mapOf("slides/slide1.xml" to slideXml))
+        val presentation = PptxParser.parse(file)
+        val runs = presentation.slides.single().elements
+            .filterIsInstance<TextElement>()
+            .flatMap { it.paragraphs }
+            .flatMap { it.runs }
+
+        assertTrue(runs.any { it.text == "Large heading" })
+        assertEquals(36f, runs.first { it.text == "Large heading" }.fontSizePt, 0.1f)
+    }
+
 }
