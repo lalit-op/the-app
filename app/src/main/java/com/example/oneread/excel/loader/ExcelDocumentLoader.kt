@@ -66,12 +66,9 @@ object ExcelDocumentLoader {
             return@withContext parseLegacyXls(file, onProgress)
         }
 
-        // Fallback: Attempt OpenXML first, then CSV
-        try {
-            parseOpenXmlWorkbook(file, onProgress)
-        } catch (_: Exception) {
-            parseCsvWorkbook(file, onProgress)
-        }
+        // Never interpret an unsupported binary/Office document as CSV. That fallback
+        // silently turns file bytes into bogus spreadsheet cells and masks the real error.
+        throw IllegalArgumentException("Unsupported spreadsheet format: .${ext.ifBlank { "(unknown)" }}")
     }
 
     /**
@@ -128,7 +125,7 @@ object ExcelDocumentLoader {
             }
 
             if (workbook.sheets.isEmpty()) {
-                workbook.sheets.add(ExcelSheetModel(name = "Sheet1", index = 0))
+                throw IllegalArgumentException("No readable worksheets were found in ${file.name}.")
             }
 
             // Calculate formulas across sheets
