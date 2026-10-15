@@ -183,6 +183,10 @@ class PptParserAndRenderingTest {
 
         val leftBraceShape = shapeElements.find { it.shapeType == ShapeType.LEFT_BRACE }
         assertNotNull("Should parse leftBrace shape geometry", leftBraceShape)
+        assertTrue(
+            "Horizontal connectors with zero height must be retained",
+            shapeElements.any { it.shapeType == ShapeType.LINE || it.shapeType == ShapeType.CONNECTOR }
+        )
     }
 
     @Test
