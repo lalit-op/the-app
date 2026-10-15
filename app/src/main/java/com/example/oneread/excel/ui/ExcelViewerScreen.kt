@@ -1,6 +1,7 @@
 package com.example.oneread.excel.ui
 
 import android.content.Context
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -191,13 +192,35 @@ fun ExcelViewerScreen(
             try {
                 isLoading = true
                 errorMessage = null
-                val file = File(liveDocument.path)
-                val loaded = if (file.exists()) {
-                    ExcelDocumentLoader.loadWorkbook(file) { status ->
-                        loadingMessage = status
-                    }
-                } else {
-                    ExcelWorkbookModel.createEmpty(liveDocument.title)
+                val uriName = liveDocument.uri.takeIf { it.isNotBlank() }
+                    ?.let { Uri.parse(it).lastPathSegment }
+                    .orEmpty()
+                val sourceName = liveDocument.title.ifBlank { uriName.ifBlank { liveDocument.displayTitle } }
+                val ext = liveDocument.extension.removePrefix(".").ifBlank {
+                    sourceName.substringAfterLast('.', "")
+                }.ifBlank {
+                    uriName.substringAfterLast('.', "")
+                }.lowercase().ifBlank { "xlsx" }
+
+                var file = liveDocument.path.takeIf { it.isNotBlank() }
+                    ?.let(::File)
+                    ?.takeIf { it.isFile && it.canRead() }
+
+                if (file == null && liveDocument.uri.isNotBlank()) {
+                    val cached = File(context.cacheDir, "excel_open_${liveDocument.id}.$ext")
+                    val copied = context.contentResolver.openInputStream(Uri.parse(liveDocument.uri))?.use { input ->
+                        cached.outputStream().use { output -> input.copyTo(output) }
+                        true
+                    } ?: false
+                    if (copied && cached.isFile && cached.length() > 0) file = cached
+                }
+
+                val actualFile = file ?: throw IllegalArgumentException("Cannot access the selected spreadsheet file.")
+                val loaded = ExcelDocumentLoader.loadWorkbook(actualFile) { status ->
+                    loadingMessage = status
+                }
+                if (loaded.sheets.isEmpty()) {
+                    throw IllegalArgumentException("No readable worksheets were found in ${actualFile.name}.")
                 }
                 workbook = loaded
                 stateManager = ExcelStateManager(loaded)
@@ -210,6 +233,9 @@ fun ExcelViewerScreen(
                     totalPages = loaded.sheetCount
                 )
             } catch (e: Exception) {
+                workbook = null
+                stateManager = null
+                searchManager = null
                 errorMessage = e.message ?: "Unable to open this workbook."
             } finally {
                 isLoading = false
@@ -217,7 +243,7 @@ fun ExcelViewerScreen(
         }
     }
 
-    LaunchedEffect(liveDocument.path) {
+    LaunchedEffect(liveDocument.path, liveDocument.uri, liveDocument.extension, liveDocument.title) {
         loadFile()
     }
 
