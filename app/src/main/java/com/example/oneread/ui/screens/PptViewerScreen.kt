@@ -18,6 +18,9 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -116,6 +119,9 @@ fun PptViewerScreen(
     var viewMode by remember { mutableStateOf(PptViewMode.NORMAL) }
     var fitMode by remember { mutableStateOf(PptFitMode.FIT_SCREEN) }
     var showThumbnailStrip by remember { mutableStateOf(true) }
+    // Continuous mode mirrors document readers: fit each slide to the viewport width
+    // and let the reader scroll vertically through the entire deck.
+    var continuousScrollMode by remember { mutableStateOf(true) }
 
     // Search state
     var isSearchActive by remember { mutableStateOf(false) }
@@ -300,6 +306,37 @@ fun PptViewerScreen(
         initialPage = (liveDocument.lastReadPage - 1).coerceIn(0, (totalSlides - 1).coerceAtLeast(0)),
         pageCount = { totalSlides.coerceAtLeast(1) }
     )
+    val slideListState = rememberLazyListState(
+        initialFirstVisibleItemIndex = (liveDocument.lastReadPage - 1).coerceAtLeast(0)
+    )
+
+    fun navigateToSlide(index: Int) {
+        val last = (presentation?.slides?.lastIndex ?: 0).coerceAtLeast(0)
+        val target = index.coerceIn(0, last)
+        coroutineScope.launch {
+            if (viewMode == PptViewMode.NORMAL && continuousScrollMode) {
+                slideListState.animateScrollToItem(target)
+            } else {
+                pagerState.animateScrollToPage(target)
+            }
+        }
+    }
+
+    // Keep the slide counter, search, and thumbnail selection in sync with the
+    // currently visible item in continuous mode. When returning from slideshow
+    // mode, restore the last presented slide in the vertical list.
+    LaunchedEffect(slideListState.firstVisibleItemIndex, totalSlides) {
+        if (viewMode == PptViewMode.NORMAL && continuousScrollMode && totalSlides > 0) {
+            val target = slideListState.firstVisibleItemIndex.coerceIn(0, totalSlides - 1)
+            if (pagerState.currentPage != target) pagerState.scrollToPage(target)
+        }
+    }
+    LaunchedEffect(viewMode, continuousScrollMode, totalSlides) {
+        if (viewMode == PptViewMode.NORMAL && continuousScrollMode && totalSlides > 0) {
+            val target = pagerState.currentPage.coerceIn(0, totalSlides - 1)
+            if (slideListState.firstVisibleItemIndex != target) slideListState.scrollToItem(target)
+        }
+    }
 
     // Save reading progress to global tab manager
     LaunchedEffect(pagerState.currentPage, totalSlides) {
@@ -328,7 +365,7 @@ fun PptViewerScreen(
             searchMatches = matches
             currentMatchIndex = if (matches.isNotEmpty()) 0 else -1
             if (matches.isNotEmpty()) {
-                pagerState.animateScrollToPage(matches[0])
+                navigateToSlide(matches[0])
             }
         }
     }
@@ -338,7 +375,7 @@ fun PptViewerScreen(
             val next = (currentMatchIndex + 1) % searchMatches.size
             currentMatchIndex = next
             coroutineScope.launch {
-                pagerState.animateScrollToPage(searchMatches[next])
+                navigateToSlide(searchMatches[next])
             }
         }
     }
@@ -348,7 +385,7 @@ fun PptViewerScreen(
             val prev = if (currentMatchIndex <= 0) searchMatches.size - 1 else currentMatchIndex - 1
             currentMatchIndex = prev
             coroutineScope.launch {
-                pagerState.animateScrollToPage(searchMatches[prev])
+                navigateToSlide(searchMatches[prev])
             }
         }
     }
