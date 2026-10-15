@@ -120,9 +120,9 @@ fun WordDocumentRenderer(
             try {
                 isLoading = true
                 errorMessage = null
-                val extension = document.extension.substringAfterLast('.', "")
-                    .ifBlank { document.title.substringAfterLast('.', "") }
-                    .lowercase()
+                val extension = document.extension.removePrefix(".").ifBlank {
+                    document.title.substringAfterLast('.', "")
+                }.lowercase()
                 val source = File(document.path)
                 val file = if (source.isFile && source.canRead()) {
                     source
