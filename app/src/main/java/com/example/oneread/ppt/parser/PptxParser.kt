@@ -713,7 +713,10 @@ object PptxParser {
                         }
                         "sp", "cxnSp" -> {
                             inSp = false
-                            val bounds = if (extCx > 0 && extCy > 0 && slideWidthEmus > 0 && slideHeightEmus > 0) {
+                            val isLineGeometry = shapeType == ShapeType.LINE || shapeType == ShapeType.CONNECTOR
+                            val hasUsableExtent = extCx > 0 && extCy > 0 ||
+                                (isLineGeometry && (extCx > 0 || extCy > 0))
+                            val bounds = if (hasUsableExtent && slideWidthEmus > 0 && slideHeightEmus > 0) {
                                 var curX = offX
                                 var curY = offY
                                 var curCx = extCx
