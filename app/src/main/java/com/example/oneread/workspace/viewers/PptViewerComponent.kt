@@ -81,47 +81,69 @@ fun PptViewerComponent(
     // Rendered slide bitmaps cache
     val slideBitmaps = remember { mutableStateOf<Map<Int, Bitmap>>(emptyMap()) }
 
-    LaunchedEffect(tab.filePath, tab.uriString) {
-        withContext(Dispatchers.IO) {
-            try {
-                isLoading = true
-                var targetFile = if (tab.filePath.isNotBlank()) File(tab.filePath) else null
-                if (targetFile == null || !targetFile.exists()) {
-                    if (tab.uriString.isNotBlank()) {
-                        val uri = Uri.parse(tab.uriString)
-                        val cacheFile = File(context.cacheDir, "ppt_tab_${tab.id}.pptx")
-                        context.contentResolver.openInputStream(uri)?.use { input ->
-                            FileOutputStream(cacheFile).use { output -> input.copyTo(output) }
-                        }
-                        targetFile = cacheFile
-                    }
+    LaunchedEffect(tab.filePath, tab.uriString, tab.originalFileName, tab.title) {
+        isLoading = true
+        errorMessage = null
+        presentationModel = null
+        slideBitmaps.value = emptyMap()
+        try {
+            val requestedSlideIndex = currentSlideIndex
+            val loaded = withContext(Dispatchers.IO) {
+                val sourceName = tab.originalFileName.ifBlank { tab.title }
+                val extension = sourceName.substringAfterLast('.', "").lowercase()
+                val supportedLegacy = setOf("ppt", "pps", "pot")
+                val supportedOpenXml = setOf("pptx", "pptm", "potx", "ppsx", "ppsm")
+                if (extension !in supportedLegacy && extension !in supportedOpenXml) {
+                    throw IllegalArgumentException(
+                        "Unsupported PowerPoint format: .${extension.ifBlank { "(unknown)" }}. " +
+                            "This renderer supports legacy PPT/PPS/POT and OpenXML PPTX/PPTM/POTX/PPSX/PPSM files."
+                    )
                 }
 
-                if (targetFile != null && targetFile.exists()) {
-                    val ext = targetFile.extension.lowercase()
-                    val model = if (ext == "ppt") {
-                        LegacyPptParser.parse(targetFile)
-                    } else {
-                        PptxParser.parse(targetFile)
-                    }
-                    presentationModel = model
-                    val count = maxOf(1, model.slides.size)
-                    slideCount = count
-                    currentSlideIndex = currentSlideIndex.coerceIn(0, count - 1)
-                    onUpdateTab(tab.copy(totalPages = count))
-
-                    // Pre-render current slide
-                    val targetH = (1920 / model.aspectRatio).toInt()
-                    val bmp = SlideRasterizer.renderSlide(model.slides[currentSlideIndex], 1920, targetH)
-                    slideBitmaps.value = mapOf(currentSlideIndex to bmp)
+                val pathFile = File(tab.filePath)
+                val targetFile = if (pathFile.isFile && pathFile.canRead()) {
+                    pathFile
                 } else {
-                    errorMessage = "File not found"
+                    if (tab.uriString.isBlank()) {
+                        throw IllegalArgumentException("Presentation is not accessible. Reopen it from the file picker.")
+                    }
+                    val uri = Uri.parse(tab.uriString)
+                    val cacheFile = File(context.cacheDir, "ppt_tab_${tab.id}.$extension")
+                    val input = context.contentResolver.openInputStream(uri)
+                        ?: throw IllegalArgumentException("Android could not open the selected presentation.")
+                    input.use { source ->
+                        FileOutputStream(cacheFile).use { sink -> source.copyTo(sink) }
+                    }
+                    if (!cacheFile.isFile || cacheFile.length() == 0L) {
+                        throw IllegalArgumentException("The selected presentation is empty or could not be copied.")
+                    }
+                    cacheFile
                 }
-            } catch (e: Exception) {
-                errorMessage = e.message ?: "Could not parse presentation."
-            } finally {
-                isLoading = false
+
+                val actualExtension = targetFile.extension.lowercase()
+                val model = when (actualExtension) {
+                    in supportedLegacy -> LegacyPptParser.parse(targetFile)
+                    in supportedOpenXml -> PptxParser.parse(targetFile)
+                    else -> throw IllegalArgumentException("Unsupported PowerPoint file extension: .$actualExtension")
+                }
+                if (model.slides.isEmpty()) {
+                    throw IllegalArgumentException("No readable slides were found in this presentation.")
+                }
+                val selectedIndex = requestedSlideIndex.coerceIn(0, model.slides.lastIndex)
+                val targetHeight = (1920 / model.aspectRatio.coerceAtLeast(0.1f)).toInt().coerceAtLeast(180)
+                val bitmap = SlideRasterizer.renderSlide(model.slides[selectedIndex], 1920, targetHeight)
+                Triple(model, selectedIndex, bitmap)
             }
+
+            presentationModel = loaded.first
+            slideCount = loaded.first.slides.size
+            currentSlideIndex = loaded.second
+            slideBitmaps.value = mapOf(loaded.second to loaded.third)
+            onUpdateTab(tab.copy(totalPages = loaded.first.slides.size))
+        } catch (e: Exception) {
+            errorMessage = e.message ?: "Could not open this presentation."
+        } finally {
+            isLoading = false
         }
     }
 
