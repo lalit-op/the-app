@@ -37,3 +37,12 @@ jobs:
 
       - name: Run unit tests and build debug APK
         run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace
+
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hr-read-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
