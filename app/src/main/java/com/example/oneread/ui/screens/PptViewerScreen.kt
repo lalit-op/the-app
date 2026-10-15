@@ -894,7 +894,7 @@ fun PptViewerScreen(
                             if (pagerState.currentPage > 0 && !isFullscreen) {
                                 IconButton(
                                     onClick = {
-                                        coroutineScope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) }
+                                        navigateToSlide(pagerState.currentPage - 1)
                                     },
                                     modifier = Modifier
                                         .align(Alignment.CenterStart)
@@ -911,7 +911,7 @@ fun PptViewerScreen(
                             if (pagerState.currentPage < totalSlides - 1 && !isFullscreen) {
                                 IconButton(
                                     onClick = {
-                                        coroutineScope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
+                                        navigateToSlide(pagerState.currentPage + 1)
                                     },
                                     modifier = Modifier
                                         .align(Alignment.CenterEnd)
