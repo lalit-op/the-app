@@ -124,9 +124,13 @@ object SlideRasterizer {
             ShapeType.LINE, ShapeType.CONNECTOR -> {
                 val linePaint = strokePaint ?: fillPaint ?: Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     color = android.graphics.Color.rgb(30, 41, 59)
+                    style = Paint.Style.STROKE
                     strokeWidth = 2.5f * scaleFactor
                 }
-                canvas.drawLine(rect.left, rect.centerY(), rect.right, rect.centerY(), linePaint)
+                // Connector extents can have zero height (horizontal) or zero width
+                // (vertical). Drawing through the centerY collapses vertical connectors
+                // into a point and shifts diagonal connectors away from their endpoints.
+                canvas.drawLine(rect.left, rect.top, rect.right, rect.bottom, linePaint)
             }
             ShapeType.LEFT_BRACE -> {
                 val bracePaint = strokePaint ?: fillPaint ?: Paint(Paint.ANTI_ALIAS_FLAG).apply {
