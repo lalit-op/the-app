@@ -24,7 +24,18 @@ object DocxParser {
 
     fun parse(file: File): DocxDocument {
         if (!file.exists() || !file.canRead()) {
-            return DocxDocument(title = file.name)
+            throw IllegalArgumentException("Word document is missing or unreadable: ${file.name}")
+        }
+
+        val extension = file.extension.lowercase()
+        if (extension == "rtf") {
+            return parsePlainTextFallback(file)
+        }
+        if (extension !in setOf("docx", "docm", "dotx", "dotm")) {
+            throw IllegalArgumentException(
+                "Unsupported Word format: .${extension.ifBlank { "(unknown)" }}. " +
+                    "The built-in parser supports DOCX-family OpenXML files and RTF."
+            )
         }
 
         return try {
@@ -117,10 +128,13 @@ object DocxParser {
                 )
             } else {
                 zip.close()
-                parsePlainTextFallback(file)
+                throw IllegalArgumentException("The OpenXML Word package is missing word/document.xml.")
             }
-        } catch (_: Exception) {
-            parsePlainTextFallback(file)
+        } catch (e: Exception) {
+            throw IllegalArgumentException(
+                "Could not parse Word document '${file.name}'. The file may be damaged or use an unsupported format.",
+                e
+            )
         }
     }
 
