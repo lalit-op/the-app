@@ -201,4 +201,13 @@ class DocxParserTest {
         assertFalse(allText.contains("\\fonttbl"))
         assertFalse(allText.contains("\\rtf1"))
     }
+    @Test
+    fun malformedDocxDoesNotFallBackToDisplayingRawBytes() {
+        val file = tempFolder.newFile("broken_document.docx")
+        file.writeText("This is not a ZIP-based Word document.")
+        val error = runCatching { DocxParser.parse(file) }.exceptionOrNull()
+        assertNotNull("Malformed DOCX must report an error", error)
+        assertTrue("Malformed DOCX should fail with a clear argument error", error is IllegalArgumentException)
+    }
+
 }
