@@ -1,0 +1,65 @@
+name: Android build and tests
+
+on:
+  push:
+    branches:
+      - main
+      - fix/document-viewers-loading
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          accept-android-sdk-licenses: true
+
+      - name: Install Android SDK components
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      # The repository deliberately does not contain a developer's local debug key.
+      # Generate a throwaway CI-only key matching the build.gradle.kts debug config.
+      - name: Generate CI debug keystore
+        run: >-
+          keytool -genkeypair -v
+          -keystore debug.keystore
+          -storepass android
+          -alias androiddebugkey
+          -keypass android
+          -keyalg RSA
+          -keysize 2048
+          -validity 10000
+          -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Run unit tests and assemble debug APK
+        run: gradle :app:testDebugUnitTest :app:assembleDebug
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: HR-Read-debug-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7

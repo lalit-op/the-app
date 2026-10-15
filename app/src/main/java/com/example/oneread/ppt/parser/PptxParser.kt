@@ -332,12 +332,25 @@ object PptxParser {
         // Current text state
         var textParagraphs = mutableListOf<SlideParagraph>()
         var currentParaRuns = mutableListOf<SlideTextRun>()
+        var currentParaRunExplicitSizes = mutableListOf<Boolean>()
         var currentParaAlign = TextAlignment.LEFT
         var currentParaIsBullet = false
         var currentParaBulletChar = "•"
         var currentParaBulletLevel = 0
 
+        // Text runs inherit DrawingML paragraph defaults (a:defRPr) unless a
+        // run-specific a:rPr overrides them. Keep defaults separate so each run
+        // does not reset titles and bullets to an arbitrary 14 pt size.
+        var paragraphDefaultSize = 14f
+        var paragraphDefaultBold = false
+        var paragraphDefaultItalic = false
+        var paragraphDefaultUnderline = false
+        var paragraphDefaultColor = Color(0xFF1E293B)
+        var paragraphDefaultFamily: String? = null
+        var inDefaultRunProps = false
+
         var currentRunSize = 14f
+        var currentRunHasExplicitSize = false
         var currentRunBold = false
         var currentRunItalic = false
         var currentRunUnderline = false
@@ -473,6 +486,10 @@ object PptxParser {
                                     backgroundColor = clr
                                 } else if (inTcPr) {
                                     currentCellFillColor = clr
+                                } else if (inDefaultRunProps) {
+                                    paragraphDefaultColor = clr
+                                } else if (inDefaultRunProps) {
+                                    paragraphDefaultColor = clr
                                 } else if (inRun) {
                                     currentRunColor = clr
                                     if (inTc) currentCellTextColor = clr
@@ -536,10 +553,17 @@ object PptxParser {
                         "p" -> {
                             inParagraph = true
                             currentParaRuns = mutableListOf()
+                            currentParaRunExplicitSizes = mutableListOf()
                             currentParaAlign = TextAlignment.LEFT
                             currentParaIsBullet = false
                             currentParaBulletChar = "•"
                             currentParaBulletLevel = 0
+                            paragraphDefaultSize = 14f
+                            paragraphDefaultBold = false
+                            paragraphDefaultItalic = false
+                            paragraphDefaultUnderline = false
+                            paragraphDefaultColor = Color(0xFF1E293B)
+                            paragraphDefaultFamily = null
                         }
                         "pPr" -> {
                             val algn = parser.getAttributeValue(null, "algn")
@@ -573,26 +597,63 @@ object PptxParser {
                         }
                         "r" -> {
                             inRun = true
-                            currentRunSize = 14f
-                            currentRunBold = false
-                            currentRunItalic = false
-                            currentRunUnderline = false
-                            currentRunColor = Color(0xFF1E293B)
-                            currentRunFamily = null
+                            currentRunHasExplicitSize = false
+                            currentRunSize = paragraphDefaultSize
+                            currentRunBold = paragraphDefaultBold
+                            currentRunItalic = paragraphDefaultItalic
+                            currentRunUnderline = paragraphDefaultUnderline
+                            currentRunColor = paragraphDefaultColor
+                            currentRunFamily = paragraphDefaultFamily
+                        }
+                        "defRPr" -> {
+                            inDefaultRunProps = true
+                            parser.getAttributeValue(null, "sz")?.toFloatOrNull()?.let {
+                                paragraphDefaultSize = (it / 100f).coerceIn(6f, 96f)
+                            }
+                            parser.getAttributeValue(null, "b")?.let {
+                                paragraphDefaultBold = it == "1" || it.equals("true", true)
+                            }
+                            parser.getAttributeValue(null, "i")?.let {
+                                paragraphDefaultItalic = it == "1" || it.equals("true", true)
+                            }
+                            parser.getAttributeValue(null, "u")?.let {
+                                paragraphDefaultUnderline = it != "none"
+                            }
                         }
                         "rPr" -> {
-                            val sz = parser.getAttributeValue(null, "sz")?.toFloatOrNull()
-                            if (sz != null) currentRunSize = (sz / 100f).coerceIn(8f, 72f)
-                            val b = parser.getAttributeValue(null, "b")
-                            currentRunBold = (b == "1" || b == "true")
+                            parser.getAttributeValue(null, "sz")?.toFloatOrNull()?.let {
+                                currentRunSize = (it / 100f).coerceIn(6f, 96f)
+                                currentRunHasExplicitSize = true
+                            }
+                            parser.getAttributeValue(null, "b")?.let {
+                                currentRunBold = it == "1" || it.equals("true", true)
+                            }
                             if (inTc && currentRunBold) currentCellBold = true
-                            val i = parser.getAttributeValue(null, "i")
-                            currentRunItalic = (i == "1" || i == "true")
-                            val u = parser.getAttributeValue(null, "u")
-                            currentRunUnderline = (u != null && u != "none")
+                            parser.getAttributeValue(null, "i")?.let {
+                                currentRunItalic = it == "1" || it.equals("true", true)
+                            }
+                            parser.getAttributeValue(null, "u")?.let {
+                                currentRunUnderline = it != "none"
+                            }
+                        }
+                        "endParaRPr" -> {
+                            // In many Office files the visible text size is only expressed
+                            // on a:endParaRPr while a:rPr omits sz. Apply it only to runs
+                            // which did not declare their own font size.
+                            val sz = parser.getAttributeValue(null, "sz")?.toFloatOrNull()
+                            if (sz != null) {
+                                val paragraphSize = (sz / 100f).coerceIn(6f, 96f)
+                                currentParaRuns = currentParaRuns.mapIndexed { idx, run ->
+                                    if (currentParaRunExplicitSizes.getOrNull(idx) == false) {
+                                        run.copy(fontSizePt = paragraphSize)
+                                    } else run
+                                }.toMutableList()
+                            }
                         }
                         "latin" -> {
-                            currentRunFamily = parser.getAttributeValue(null, "typeface")
+                            val family = parser.getAttributeValue(null, "typeface")
+                            if (inDefaultRunProps) paragraphDefaultFamily = family
+                            if (inRun) currentRunFamily = family
                         }
                         "t" -> {
                             val text = parser.nextText()
@@ -611,6 +672,7 @@ object PptxParser {
                                         fontFamily = currentRunFamily
                                     )
                                 )
+                                currentParaRunExplicitSizes.add(currentRunHasExplicitSize)
                                 searchableTextBuilder.append(text).append(" ")
                             }
                         }
@@ -620,6 +682,7 @@ object PptxParser {
                     when (parser.name) {
                         "bg" -> inBg = false
                         "ln" -> inLn = false
+                        "defRPr" -> inDefaultRunProps = false
                         "r" -> inRun = false
                         "p" -> {
                             if (currentParaRuns.isNotEmpty()) {

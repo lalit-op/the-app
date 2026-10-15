@@ -47,7 +47,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
-import java.util.zip.ZipFile
 
 @Composable
 fun ExcelViewerComponent(
@@ -71,65 +70,52 @@ fun ExcelViewerComponent(
         withContext(Dispatchers.IO) {
             try {
                 isLoading = true
+                val uriFileName = tab.uriString.takeIf { it.isNotBlank() }
+                    ?.let { Uri.parse(it).lastPathSegment }
+                    .orEmpty()
+                val sourceFileName = tab.originalFileName.ifBlank {
+                    uriFileName.ifBlank { tab.title }
+                }
+                val sourceExtension = sourceFileName.substringAfterLast('.', "")
+                    .ifBlank { tab.displayExtension }
+                    .lowercase()
+                    .removePrefix(".")
+                    .ifBlank { "xlsx" }
+
                 var targetFile = if (tab.filePath.isNotBlank()) File(tab.filePath) else null
                 if (targetFile == null || !targetFile.exists()) {
                     if (tab.uriString.isNotBlank()) {
                         val uri = Uri.parse(tab.uriString)
-                        val cacheFile = File(context.cacheDir, "excel_tab_${tab.id}.xlsx")
-                        context.contentResolver.openInputStream(uri)?.use { input ->
+                        val cacheFile = File(context.cacheDir, "excel_tab_${tab.id}.$sourceExtension")
+                        val copied = context.contentResolver.openInputStream(uri)?.use { input ->
                             FileOutputStream(cacheFile).use { output -> input.copyTo(output) }
-                        }
+                            true
+                        } ?: false
+                        if (!copied) throw IllegalArgumentException("Cannot open the selected spreadsheet.")
                         targetFile = cacheFile
                     }
                 }
 
-                val parsedSheets = mutableListOf<List<List<String>>>()
-                val parsedNames = mutableListOf<String>()
+                val file = targetFile?.takeIf { it.exists() && it.isFile }
+                    ?: throw IllegalArgumentException("Spreadsheet file is missing or cannot be accessed.")
 
-                if (targetFile != null && targetFile.exists()) {
-                    val xlsxData = parseXlsxSheets(targetFile)
-                    if (xlsxData.isNotEmpty()) {
-                        xlsxData.forEachIndexed { idx, s ->
-                            parsedSheets.add(s)
-                            parsedNames.add("Sheet ${idx + 1}")
-                        }
-                    } else {
-                        // TSV / CSV text lines fallback
-                        val lines = runCatching { targetFile.readLines() }.getOrElse { emptyList() }
-                        val grid = lines.take(300).map { line ->
-                            if (line.contains('\t')) line.split('\t')
-                            else if (line.contains(',')) line.split(',')
-                            else listOf(line)
-                        }
-                        if (grid.isNotEmpty()) {
-                            parsedSheets.add(grid)
-                            parsedNames.add("Sheet 1")
-                        }
-                    }
+                // Use the app's central spreadsheet loader so real worksheet relationships,
+                // shared strings and sparse cell references are handled consistently.
+                val workbook = com.example.oneread.excel.loader.ExcelDocumentLoader.loadWorkbook(file)
+                if (workbook.sheets.isEmpty()) {
+                    throw IllegalArgumentException("This workbook contains no readable worksheets.")
                 }
 
-                if (parsedSheets.isEmpty()) {
-                    // Sample modern spreadsheet
-                    val sample = listOf(
-                        listOf("Quarter", "Region", "Units Sold", "Revenue", "Profit Margin", "Status"),
-                        listOf("Q1 2026", "North America", "12,450", "$622,500", "28.4%", "Approved"),
-                        listOf("Q1 2026", "Europe", "8,920", "$446,000", "26.1%", "Approved"),
-                        listOf("Q1 2026", "Asia Pacific", "15,300", "$765,000", "31.2%", "Pending"),
-                        listOf("Q1 2026", "Latin America", "4,200", "$210,000", "22.5%", "Approved"),
-                        listOf("Q2 2026 (Est.)", "North America", "13,800", "$690,000", "29.0%", "Draft"),
-                        listOf("Q2 2026 (Est.)", "Europe", "9,500", "$475,000", "27.5%", "Draft"),
-                        listOf("Q2 2026 (Est.)", "Asia Pacific", "17,000", "$850,000", "32.0%", "Draft"),
-                        listOf("Total / Avg", "Global", "81,170", "$4,058,500", "28.1%", "Active")
-                    )
-                    parsedSheets.add(sample)
-                    parsedNames.add("Financials")
-                    parsedNames.add("Summary")
-                    parsedSheets.add(listOf(
-                        listOf("Metric", "Target", "Actual", "Variance"),
-                        listOf("Gross Revenue", "$4,000,000", "$4,058,500", "+1.4%"),
-                        listOf("Customer Retention", "92.0%", "94.5%", "+2.5%"),
-                        listOf("Active Users", "1,200,000", "1,280,000", "+6.6%")
-                    ))
+                val parsedSheets = mutableListOf<List<List<String>>>()
+                val parsedNames = mutableListOf<String>()
+                workbook.sheets.forEach { sheet ->
+                    val lastRow = maxOf(sheet.maxRow, sheet.cells.values.maxOfOrNull { it.row } ?: 1).coerceIn(1, 2000)
+                    val lastCol = maxOf(sheet.maxCol, sheet.cells.values.maxOfOrNull { it.col } ?: 1).coerceIn(1, 100)
+                    val grid = (1..lastRow).map { row ->
+                        (1..lastCol).map { col -> sheet.getCellValue(row, col) }
+                    }
+                    parsedSheets.add(grid)
+                    parsedNames.add(sheet.name)
                 }
 
                 sheets = parsedSheets
@@ -403,51 +389,4 @@ private fun getColumnLetter(index: Int): String {
         num = (num / 26) - 1
     }
     return letter
-}
-
-private fun parseXlsxSheets(file: File): List<List<List<String>>> {
-    return runCatching {
-        val zip = ZipFile(file)
-        val sharedStrings = mutableListOf<String>()
-        val sstEntry = zip.getEntry("xl/sharedStrings.xml")
-        if (sstEntry != null) {
-            val sstXml = zip.getInputStream(sstEntry).bufferedReader().use { it.readText() }
-            val tRegex = Regex("<t[ >](.*?)</t>", RegexOption.DOT_MATCHES_ALL)
-            for (match in tRegex.findAll(sstXml)) {
-                sharedStrings.add(match.groupValues[1])
-            }
-        }
-
-        val allSheets = mutableListOf<List<List<String>>>()
-
-        // Check for multiple sheets (sheet1, sheet2, sheet3...)
-        for (sheetNum in 1..10) {
-            val sheetEntry = zip.getEntry("xl/worksheets/sheet$sheetNum.xml") ?: break
-            val sheetXml = zip.getInputStream(sheetEntry).bufferedReader().use { it.readText() }
-            val rowRegex = Regex("<row[ >](.*?)</row>", RegexOption.DOT_MATCHES_ALL)
-            val cellRegex = Regex("<c [^>]*?t=\"([^\"]*)\"[^>]*?>(.*?)</c>|<c [^>]*?>(.*?)</c>", RegexOption.DOT_MATCHES_ALL)
-            val valRegex = Regex("<v>(.*?)</v>")
-            val rows = mutableListOf<List<String>>()
-
-            for (rowMatch in rowRegex.findAll(sheetXml)) {
-                val rowCells = mutableListOf<String>()
-                for (cellMatch in cellRegex.findAll(rowMatch.value)) {
-                    val isShared = cellMatch.value.contains("t=\"s\"")
-                    val vMatch = valRegex.find(cellMatch.value)
-                    val rawVal = vMatch?.groupValues?.get(1) ?: ""
-                    val cellText = if (isShared) {
-                        val idx = rawVal.toIntOrNull()
-                        if (idx != null && idx in sharedStrings.indices) sharedStrings[idx] else rawVal
-                    } else {
-                        rawVal
-                    }
-                    rowCells.add(cellText)
-                }
-                if (rowCells.isNotEmpty()) rows.add(rowCells)
-            }
-            if (rows.isNotEmpty()) allSheets.add(rows)
-        }
-        zip.close()
-        allSheets
-    }.getOrElse { emptyList() }
 }
