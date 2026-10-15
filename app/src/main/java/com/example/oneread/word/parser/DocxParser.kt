@@ -117,10 +117,21 @@ object DocxParser {
                 )
             } else {
                 zip.close()
-                parsePlainTextFallback(file)
+                if (file.extension.equals("rtf", ignoreCase = true)) {
+                    parsePlainTextFallback(file)
+                } else {
+                    throw IllegalArgumentException("No Word OpenXML document part was found in ${file.name}.")
+                }
             }
-        } catch (_: Exception) {
-            parsePlainTextFallback(file)
+        } catch (e: Exception) {
+            // RTF is a text-based format and intentionally uses the lightweight RTF parser.
+            // Never read a broken DOCX ZIP as text: that produces binary/XML garbage that
+            // looks like document content and hides the actual error.
+            if (file.extension.equals("rtf", ignoreCase = true)) {
+                parsePlainTextFallback(file)
+            } else {
+                throw IllegalArgumentException("Unable to parse Word OpenXML file ${file.name}: ${e.message ?: "invalid document package"}", e)
+            }
         }
     }
 
