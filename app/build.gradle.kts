@@ -18,15 +18,6 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    signingConfigs {
-        getByName("debug") {
-            storeFile = file("${rootDir}/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
-        }
-    }
-
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -35,9 +26,8 @@ android {
                 "proguard-rules.pro"
             )
         }
-        debug {
-            signingConfig = signingConfigs.getByName("debug")
-        }
+        // Use Gradle's standard local debug signing config. Do not require a
+        // developer-specific root/debug.keystore in CI or clean checkouts.
     }
 
     compileOptions {
