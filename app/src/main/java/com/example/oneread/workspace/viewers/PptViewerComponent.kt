@@ -81,42 +81,52 @@ fun PptViewerComponent(
     // Rendered slide bitmaps cache
     val slideBitmaps = remember { mutableStateOf<Map<Int, Bitmap>>(emptyMap()) }
 
-    LaunchedEffect(tab.filePath, tab.uriString) {
+    LaunchedEffect(tab.filePath, tab.uriString, tab.originalFileName) {
         withContext(Dispatchers.IO) {
             try {
                 isLoading = true
-                var targetFile = if (tab.filePath.isNotBlank()) File(tab.filePath) else null
-                if (targetFile == null || !targetFile.exists()) {
-                    if (tab.uriString.isNotBlank()) {
-                        val uri = Uri.parse(tab.uriString)
-                        val cacheFile = File(context.cacheDir, "ppt_tab_${tab.id}.pptx")
-                        context.contentResolver.openInputStream(uri)?.use { input ->
-                            FileOutputStream(cacheFile).use { output -> input.copyTo(output) }
-                        }
-                        targetFile = cacheFile
-                    }
+                errorMessage = null
+                val declaredExtension = tab.originalFileName.substringAfterLast('.', "")
+                    .ifBlank { tab.displayExtension }
+                    .lowercase()
+                    .removePrefix(".")
+
+                var targetFile = tab.filePath.takeIf { it.isNotBlank() }
+                    ?.let(::File)
+                    ?.takeIf { it.isFile && it.canRead() }
+
+                if (targetFile == null && tab.uriString.isNotBlank()) {
+                    val uri = Uri.parse(tab.uriString)
+                    val uriExtension = uri.lastPathSegment.orEmpty().substringAfterLast('.', "")
+                    val cacheExtension = declaredExtension.ifBlank { uriExtension.ifBlank { "pptx" } }
+                    val cacheFile = File(context.cacheDir, "ppt_tab_${tab.id}.$cacheExtension")
+                    val copied = context.contentResolver.openInputStream(uri)?.use { input ->
+                        FileOutputStream(cacheFile).use { output -> input.copyTo(output) }
+                        true
+                    } ?: false
+                    if (copied && cacheFile.isFile && cacheFile.length() > 0) targetFile = cacheFile
                 }
 
-                if (targetFile != null && targetFile.exists()) {
-                    val ext = targetFile.extension.lowercase()
-                    val model = if (ext == "ppt") {
-                        LegacyPptParser.parse(targetFile)
-                    } else {
-                        PptxParser.parse(targetFile)
-                    }
-                    presentationModel = model
-                    val count = maxOf(1, model.slides.size)
-                    slideCount = count
-                    currentSlideIndex = currentSlideIndex.coerceIn(0, count - 1)
-                    onUpdateTab(tab.copy(totalPages = count))
-
-                    // Pre-render current slide
-                    val targetH = (1920 / model.aspectRatio).toInt()
-                    val bmp = SlideRasterizer.renderSlide(model.slides[currentSlideIndex], 1920, targetH)
-                    slideBitmaps.value = mapOf(currentSlideIndex to bmp)
-                } else {
-                    errorMessage = "File not found"
+                val file = targetFile ?: throw IllegalArgumentException("Cannot access the selected PowerPoint file.")
+                val ext = file.extension.lowercase()
+                if (ext !in setOf("ppt", "pptx", "pptm", "potx", "potm", "ppsx", "ppsm")) {
+                    throw IllegalArgumentException("Unsupported PowerPoint format: .${ext.ifBlank { "unknown" }}")
                 }
+
+                val model = if (ext == "ppt") LegacyPptParser.parse(file) else PptxParser.parse(file)
+                if (model.slides.isEmpty()) {
+                    throw IllegalArgumentException("No readable slides were found in ${file.name}.")
+                }
+                presentationModel = model
+                val count = model.slides.size
+                slideCount = count
+                currentSlideIndex = currentSlideIndex.coerceIn(0, count - 1)
+                onUpdateTab(tab.copy(totalPages = count))
+
+                // Pre-render the current slide at the existing workspace baseline.
+                val targetH = (1920 / model.aspectRatio).toInt().coerceAtLeast(180)
+                val bmp = SlideRasterizer.renderSlide(model.slides[currentSlideIndex], 1920, targetH)
+                slideBitmaps.value = mapOf(currentSlideIndex to bmp)
             } catch (e: Exception) {
                 errorMessage = e.message ?: "Could not parse presentation."
             } finally {
