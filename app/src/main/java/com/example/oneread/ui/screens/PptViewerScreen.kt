@@ -73,6 +73,11 @@ enum class PptViewMode {
     PRESENTATION
 }
 
+enum class PptFitMode {
+    FIT_SCREEN,
+    FIT_WIDTH
+}
+
 private fun clampOffset(offset: Offset, scale: Float, containerWidth: Float, containerHeight: Float): Offset {
     if (scale <= 1.0f) return Offset.Zero
     val maxPanX = (containerWidth * (scale - 1f)).coerceAtLeast(0f) / 2f
@@ -109,6 +114,7 @@ fun PptViewerScreen(
 
     // View mode: Normal, Slide Sorter, Presentation
     var viewMode by remember { mutableStateOf(PptViewMode.NORMAL) }
+    var fitMode by remember { mutableStateOf(PptFitMode.FIT_SCREEN) }
     var showThumbnailStrip by remember { mutableStateOf(true) }
 
     // Search state
@@ -485,15 +491,29 @@ fun PptViewerScreen(
                                     }
                                 }
 
-                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                BoxWithConstraints(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    val containerW = maxWidth
+                                    val containerH = maxHeight
+                                    val containerRatio = if (containerH.value > 0) containerW.value / containerH.value else 1f
+                                    val (targetW, targetH) = if (containerRatio > pres.aspectRatio) {
+                                        val h = containerH
+                                        val w = h * pres.aspectRatio
+                                        w to h
+                                    } else {
+                                        val w = containerW
+                                        val h = w / pres.aspectRatio
+                                        w to h
+                                    }
+
                                     if (slideBitmap != null) {
                                         Image(
                                             bitmap = slideBitmap!!.asImageBitmap(),
                                             contentDescription = "Slide ${pageIndex + 1}",
-                                            contentScale = ContentScale.Fit,
-                                            modifier = Modifier
-                                                .aspectRatio(pres.aspectRatio)
-                                                .fillMaxSize()
+                                            contentScale = ContentScale.FillBounds,
+                                            modifier = Modifier.size(targetW, targetH)
                                         )
                                     } else {
                                         CircularProgressIndicator(color = Color(0xFFEA580C))
@@ -705,27 +725,47 @@ fun PptViewerScreen(
                                         }
                                     }
 
-                                    Box(
+                                    BoxWithConstraints(
                                         modifier = Modifier
                                             .fillMaxSize()
                                             .padding(
-                                                horizontal = if (isFullscreen) 0.dp else 12.dp,
-                                                vertical = if (isFullscreen) 0.dp else 14.dp
+                                                horizontal = if (isFullscreen) 0.dp else 8.dp,
+                                                vertical = if (isFullscreen) 0.dp else 8.dp
                                             ),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        if (slideBitmap != null) {
-                                            Image(
-                                                bitmap = slideBitmap!!.asImageBitmap(),
-                                                contentDescription = "Slide ${pageIndex + 1}: ${slide.title}",
-                                                contentScale = ContentScale.Fit,
-                                                modifier = Modifier
-                                                    .aspectRatio(pres.aspectRatio)
-                                                    .fillMaxWidth()
-                                                    .shadow(if (isFullscreen) 0.dp else 10.dp, RoundedCornerShape(4.dp))
-                                            )
+                                        val containerW = maxWidth
+                                        val containerH = maxHeight
+                                        val containerRatio = if (containerH.value > 0) containerW.value / containerH.value else 1f
+                                        val (targetW, targetH) = if (containerRatio > pres.aspectRatio) {
+                                            // Height-constrained (landscape or widescreen)
+                                            val h = containerH
+                                            val w = h * pres.aspectRatio
+                                            w to h
                                         } else {
-                                            CircularProgressIndicator(color = Color(0xFFEA580C), modifier = Modifier.size(36.dp))
+                                            // Width-constrained (portrait)
+                                            val w = containerW
+                                            val h = w / pres.aspectRatio
+                                            w to h
+                                        }
+
+                                        Surface(
+                                            shape = RoundedCornerShape(if (isFullscreen) 0.dp else 4.dp),
+                                            shadowElevation = if (isFullscreen) 0.dp else 8.dp,
+                                            modifier = Modifier.size(targetW, targetH)
+                                        ) {
+                                            if (slideBitmap != null) {
+                                                Image(
+                                                    bitmap = slideBitmap!!.asImageBitmap(),
+                                                    contentDescription = "Slide ${pageIndex + 1}: ${slide.title}",
+                                                    contentScale = ContentScale.FillBounds,
+                                                    modifier = Modifier.fillMaxSize()
+                                                )
+                                            } else {
+                                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                                    CircularProgressIndicator(color = Color(0xFFEA580C), modifier = Modifier.size(36.dp))
+                                                }
+                                            }
                                         }
                                     }
                                 }

@@ -237,11 +237,16 @@ object LegacyPptParser {
             slides
         }
 
+        val widthEmus = ((slideWidth / 8f) * 12700L).toLong().coerceAtLeast(9144000L)
+        val heightEmus = ((slideHeight / 8f) * 12700L).toLong().coerceAtLeast(6858000L)
+
         return PresentationModel(
             title = title,
             slideWidth = slideWidth,
             slideHeight = slideHeight,
             aspectRatio = aspectRatio,
+            slideWidthEmus = widthEmus,
+            slideHeightEmus = heightEmus,
             slides = finalSlides
         )
     }
@@ -317,7 +322,9 @@ object LegacyPptParser {
             title = texts.firstOrNull()?.trim() ?: "Slide ${index + 1}",
             backgroundColor = Color.White,
             elements = elements,
-            fullSearchableText = texts.joinToString(" ")
+            fullSearchableText = texts.joinToString(" "),
+            slideWidthEmus = 9144000L,
+            slideHeightEmus = 6858000L
         )
     }
 }

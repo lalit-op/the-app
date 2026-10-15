@@ -12,6 +12,8 @@ data class PresentationModel(
     val slideWidth: Float = 16f,
     val slideHeight: Float = 9f,
     val aspectRatio: Float = 16f / 9f,
+    val slideWidthEmus: Long = 12192000L,
+    val slideHeightEmus: Long = 6858000L,
     val slides: List<SlideModel> = emptyList(),
     val themeColors: Map<String, Color> = emptyMap(),
     val isModified: Boolean = false
@@ -131,9 +133,12 @@ data class SlideModel(
     val title: String = "",
     val backgroundColor: Color = Color.White,
     val backgroundImage: Bitmap? = null,
+    val gradientEndColor: Color? = null,
     val elements: List<SlideElement> = emptyList(),
     val notes: String = "",
-    val fullSearchableText: String = ""
+    val fullSearchableText: String = "",
+    val slideWidthEmus: Long = 12192000L,
+    val slideHeightEmus: Long = 6858000L
 )
 
 sealed interface SlideElement {
@@ -146,7 +151,14 @@ enum class ShapeType {
     ROUNDED_RECTANGLE,
     LINE,
     ELLIPSE,
-    CONNECTOR
+    CONNECTOR,
+    TRIANGLE,
+    ARROW,
+    LEFT_BRACE,
+    RIGHT_BRACE,
+    LEFT_BRACKET,
+    RIGHT_BRACKET,
+    DIAMOND
 }
 
 data class ShapeElement(
@@ -193,7 +205,9 @@ enum class TextAlignment {
 data class SlideParagraph(
     val alignment: TextAlignment = TextAlignment.LEFT,
     val runs: List<SlideTextRun> = emptyList(),
-    val isBullet: Boolean = false
+    val isBullet: Boolean = false,
+    val bulletChar: String = "•",
+    val bulletLevel: Int = 0
 ) {
     val plainText: String
         get() = runs.joinToString("") { it.text }
@@ -212,7 +226,9 @@ data class SlideTextRun(
 data class TableElement(
     override val bounds: RectF,
     override val zIndex: Int,
-    val rows: List<SlideTableRow> = emptyList()
+    val rows: List<SlideTableRow> = emptyList(),
+    val colWidthWeights: List<Float> = emptyList(),
+    val borderColor: Color = Color(0xFFCBD5E1)
 ) : SlideElement
 
 data class SlideTableRow(

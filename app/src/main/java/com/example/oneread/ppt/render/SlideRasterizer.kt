@@ -23,12 +23,22 @@ object SlideRasterizer {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
 
-        // 1. Draw Slide Background (Default White #FFFFFF, or slide/layout specific color/image)
-        if (slide.backgroundImage != null) {
+        // 1. Draw Slide Background (Image, Gradient, or Solid Color)
+        if (slide.backgroundImage != null && !slide.backgroundImage.isRecycled) {
             val src = Rect(0, 0, slide.backgroundImage.width, slide.backgroundImage.height)
             val dst = Rect(0, 0, width, height)
             val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
             canvas.drawBitmap(slide.backgroundImage, src, dst, bgPaint)
+        } else if (slide.gradientEndColor != null) {
+            val gradPaint = Paint().apply {
+                shader = LinearGradient(
+                    0f, 0f, 0f, height.toFloat(),
+                    slide.backgroundColor.toArgb(),
+                    slide.gradientEndColor.toArgb(),
+                    Shader.TileMode.CLAMP
+                )
+            }
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), gradPaint)
         } else {
             val bgPaint = Paint().apply {
                 color = slide.backgroundColor.toArgb()
@@ -37,7 +47,9 @@ object SlideRasterizer {
             canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
         }
 
-        // Relative scale factor for typography based on 1080p reference height
+        // Exact points-to-pixels ratio based on slide height in EMUs (1 pt = 12700 EMUs)
+        val slideHeightPt = (slide.slideHeightEmus / 12700f).coerceIn(360f, 1200f)
+        val pxPerPt = height.toFloat() / slideHeightPt
         val scaleFactor = height.toFloat() / 1080f
 
         // 2. Draw Visual Elements in Z-Index Order
@@ -56,7 +68,7 @@ object SlideRasterizer {
                     drawImage(canvas, element, elemRect)
                 }
                 is TextElement -> {
-                    drawTextElement(canvas, element, elemRect, scaleFactor, searchQuery)
+                    drawTextElement(canvas, element, elemRect, scaleFactor, pxPerPt, searchQuery)
                 }
                 is TableElement -> {
                     drawTable(canvas, element, elemRect, scaleFactor)
@@ -78,7 +90,6 @@ object SlideRasterizer {
             }
             val hlStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = android.graphics.Color.rgb(255, 107, 0) // Deep orange border
-                style = Paint.Style.STROKE
                 strokeWidth = 3f * scaleFactor
             }
             canvas.drawRoundRect(hlRect, 6f * scaleFactor, 6f * scaleFactor, hlFill)
@@ -105,26 +116,147 @@ object SlideRasterizer {
             Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = shape.strokeColor.toArgb()
                 style = Paint.Style.STROKE
-                strokeWidth = (shape.strokeWidth * scaleFactor).coerceAtLeast(1f)
+                strokeWidth = (shape.strokeWidth * scaleFactor).coerceAtLeast(1.5f * scaleFactor)
             }
         } else null
 
         when (shape.shapeType) {
             ShapeType.LINE, ShapeType.CONNECTOR -> {
-                val linePaint = strokePaint ?: fillPaint ?: Paint().apply {
-                    color = android.graphics.Color.rgb(22, 163, 74) // Green
-                    strokeWidth = 2f * scaleFactor
+                val linePaint = strokePaint ?: fillPaint ?: Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.rgb(30, 41, 59)
+                    strokeWidth = 2.5f * scaleFactor
                 }
                 canvas.drawLine(rect.left, rect.centerY(), rect.right, rect.centerY(), linePaint)
             }
+            ShapeType.LEFT_BRACE -> {
+                val bracePaint = strokePaint ?: fillPaint ?: Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.rgb(30, 41, 59)
+                    strokeWidth = 2.5f * scaleFactor
+                    style = Paint.Style.STROKE
+                }
+                bracePaint.style = Paint.Style.STROKE
+                val path = Path().apply {
+                    val midX = rect.left + rect.width() * 0.45f
+                    val tipX = rect.left
+                    val rightX = rect.right
+                    val topY = rect.top
+                    val botY = rect.bottom
+                    val midY = rect.centerY()
+                    val cornerH = (rect.height() * 0.08f).coerceAtMost(24f * scaleFactor)
+
+                    moveTo(rightX, topY)
+                    cubicTo(midX, topY, midX, topY + cornerH, midX, topY + cornerH)
+                    lineTo(midX, midY - cornerH)
+                    cubicTo(midX, midY, tipX, midY, tipX, midY)
+                    cubicTo(midX, midY, midX, midY + cornerH, midX, midY + cornerH)
+                    lineTo(midX, botY - cornerH)
+                    cubicTo(midX, botY, rightX, botY, rightX, botY)
+                }
+                canvas.drawPath(path, bracePaint)
+            }
+            ShapeType.RIGHT_BRACE -> {
+                val bracePaint = strokePaint ?: fillPaint ?: Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.rgb(30, 41, 59)
+                    strokeWidth = 2.5f * scaleFactor
+                    style = Paint.Style.STROKE
+                }
+                bracePaint.style = Paint.Style.STROKE
+                val path = Path().apply {
+                    val midX = rect.right - rect.width() * 0.45f
+                    val tipX = rect.right
+                    val leftX = rect.left
+                    val topY = rect.top
+                    val botY = rect.bottom
+                    val midY = rect.centerY()
+                    val cornerH = (rect.height() * 0.08f).coerceAtMost(24f * scaleFactor)
+
+                    moveTo(leftX, topY)
+                    cubicTo(midX, topY, midX, topY + cornerH, midX, topY + cornerH)
+                    lineTo(midX, midY - cornerH)
+                    cubicTo(midX, midY, tipX, midY, tipX, midY)
+                    cubicTo(midX, midY, midX, midY + cornerH, midX, midY + cornerH)
+                    lineTo(midX, botY - cornerH)
+                    cubicTo(midX, botY, leftX, botY, leftX, botY)
+                }
+                canvas.drawPath(path, bracePaint)
+            }
+            ShapeType.LEFT_BRACKET -> {
+                val bracketPaint = strokePaint ?: fillPaint ?: Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.rgb(30, 41, 59)
+                    strokeWidth = 2.5f * scaleFactor
+                    style = Paint.Style.STROKE
+                }
+                bracketPaint.style = Paint.Style.STROKE
+                val path = Path().apply {
+                    moveTo(rect.right, rect.top)
+                    lineTo(rect.left, rect.top)
+                    lineTo(rect.left, rect.bottom)
+                    lineTo(rect.right, rect.bottom)
+                }
+                canvas.drawPath(path, bracketPaint)
+            }
+            ShapeType.RIGHT_BRACKET -> {
+                val bracketPaint = strokePaint ?: fillPaint ?: Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.rgb(30, 41, 59)
+                    strokeWidth = 2.5f * scaleFactor
+                    style = Paint.Style.STROKE
+                }
+                bracketPaint.style = Paint.Style.STROKE
+                val path = Path().apply {
+                    moveTo(rect.left, rect.top)
+                    lineTo(rect.right, rect.top)
+                    lineTo(rect.right, rect.bottom)
+                    lineTo(rect.left, rect.bottom)
+                }
+                canvas.drawPath(path, bracketPaint)
+            }
+            ShapeType.DIAMOND -> {
+                val path = Path().apply {
+                    moveTo(rect.centerX(), rect.top)
+                    lineTo(rect.right, rect.centerY())
+                    lineTo(rect.centerX(), rect.bottom)
+                    lineTo(rect.left, rect.centerY())
+                    close()
+                }
+                fillPaint?.let { canvas.drawPath(path, it) }
+                strokePaint?.let { canvas.drawPath(path, it) }
+            }
             ShapeType.ROUNDED_RECTANGLE -> {
-                val cr = (shape.cornerRadius * scaleFactor).coerceAtLeast(8f)
+                val cr = (shape.cornerRadius * scaleFactor).coerceAtLeast(8f * scaleFactor)
                 fillPaint?.let { canvas.drawRoundRect(rect, cr, cr, it) }
                 strokePaint?.let { canvas.drawRoundRect(rect, cr, cr, it) }
             }
             ShapeType.ELLIPSE -> {
                 fillPaint?.let { canvas.drawOval(rect, it) }
                 strokePaint?.let { canvas.drawOval(rect, it) }
+            }
+            ShapeType.TRIANGLE -> {
+                val path = Path().apply {
+                    moveTo(rect.centerX(), rect.top)
+                    lineTo(rect.right, rect.bottom)
+                    lineTo(rect.left, rect.bottom)
+                    close()
+                }
+                fillPaint?.let { canvas.drawPath(path, it) }
+                strokePaint?.let { canvas.drawPath(path, it) }
+            }
+            ShapeType.ARROW -> {
+                val headW = rect.width() * 0.3f
+                val shaftH = rect.height() * 0.45f
+                val shaftTop = rect.centerY() - shaftH / 2f
+                val shaftBottom = rect.centerY() + shaftH / 2f
+                val path = Path().apply {
+                    moveTo(rect.left, shaftTop)
+                    lineTo(rect.right - headW, shaftTop)
+                    lineTo(rect.right - headW, rect.top)
+                    lineTo(rect.right, rect.centerY())
+                    lineTo(rect.right - headW, rect.bottom)
+                    lineTo(rect.right - headW, shaftBottom)
+                    lineTo(rect.left, shaftBottom)
+                    close()
+                }
+                fillPaint?.let { canvas.drawPath(path, it) }
+                strokePaint?.let { canvas.drawPath(path, it) }
             }
             ShapeType.RECTANGLE -> {
                 fillPaint?.let { canvas.drawRect(rect, it) }
@@ -138,6 +270,7 @@ object SlideRasterizer {
     }
 
     private fun drawImage(canvas: Canvas, image: ImageElement, rect: RectF) {
+        if (image.bitmap.isRecycled) return
         if (image.rotation != 0f) {
             canvas.save()
             canvas.rotate(image.rotation, rect.centerX(), rect.centerY())
@@ -150,11 +283,28 @@ object SlideRasterizer {
         }
     }
 
+    private data class WordRun(
+        val word: String,
+        val run: SlideTextRun,
+        val width: Float
+    )
+
+    private data class MeasuredLine(
+        val words: List<WordRun>,
+        val lineWidth: Float,
+        val lineHeight: Float,
+        val isFirstLineOfBullet: Boolean = false,
+        val bulletChar: String = "•",
+        val bulletIndent: Float = 0f,
+        val alignment: TextAlignment = TextAlignment.LEFT
+    )
+
     private fun drawTextElement(
         canvas: Canvas,
         element: TextElement,
         rect: RectF,
         scaleFactor: Float,
+        pxPerPt: Float,
         searchQuery: String
     ) {
         // Draw optional background fill or border of the text box
@@ -169,59 +319,156 @@ object SlideRasterizer {
             val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = element.borderColor.toArgb()
                 style = Paint.Style.STROKE
-                strokeWidth = element.borderWidth * scaleFactor
+                strokeWidth = (element.borderWidth * scaleFactor).coerceAtLeast(1f)
             }
             canvas.drawRect(rect, borderPaint)
         }
 
-        // Layout and draw paragraphs
-        var yCursor = rect.top + 8f * scaleFactor
+        val paddingX = 4f * scaleFactor
+        val paddingY = 4f * scaleFactor
+        val maxAvailableWidth = (rect.width() - 2 * paddingX).coerceAtLeast(20f)
+        val measuredLines = mutableListOf<MeasuredLine>()
+
+        // 1. Line breaking with Word-Wrapping across all paragraphs
+        val tempPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
 
         for (para in element.paragraphs) {
-            if (para.runs.isEmpty()) {
-                yCursor += 16f * scaleFactor
+            if (para.runs.isEmpty() || para.runs.all { it.text.isEmpty() }) {
+                // Empty paragraph spacer
+                measuredLines.add(
+                    MeasuredLine(
+                        words = emptyList(),
+                        lineWidth = 0f,
+                        lineHeight = 14f * pxPerPt * 0.7f,
+                        alignment = para.alignment
+                    )
+                )
                 continue
             }
 
-            val maxPt = para.runs.maxOfOrNull { it.fontSizePt } ?: 14f
-            val baseTextSize = (maxPt * 1.6f * scaleFactor).coerceAtLeast(10f)
-            val lineHeight = baseTextSize * 1.3f
+            val bulletIndent = if (para.isBullet) (16f + para.bulletLevel * 12f) * pxPerPt else 0f
+            val effectiveLineWidth = (maxAvailableWidth - bulletIndent).coerceAtLeast(15f)
 
-            // Check if paragraph fits within remaining height
-            if (yCursor + lineHeight > rect.bottom + 20f * scaleFactor) break
-
-            // Calculate total width of paragraph line to determine starting X for alignment
-            var totalParaWidth = 0f
-            val tempPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
+            // Split into word tokens
+            val wordsInPara = mutableListOf<WordRun>()
             for (run in para.runs) {
-                tempPaint.textSize = (run.fontSizePt * 1.6f * scaleFactor).coerceAtLeast(10f)
-                tempPaint.typeface = if (run.isBold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-                totalParaWidth += tempPaint.measureText(run.text)
-            }
-
-            var xCursor = when (para.alignment) {
-                TextAlignment.CENTER -> (rect.centerX() - totalParaWidth / 2f).coerceAtLeast(rect.left)
-                TextAlignment.RIGHT -> (rect.right - totalParaWidth).coerceAtLeast(rect.left)
-                else -> rect.left
-            }
-
-            for (run in para.runs) {
-                val runPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = run.color.toArgb()
-                    textSize = (run.fontSizePt * 1.6f * scaleFactor).coerceAtLeast(10f)
-                    typeface = when {
-                        run.isBold && run.isItalic -> Typeface.create(Typeface.DEFAULT, Typeface.BOLD_ITALIC)
-                        run.isBold -> Typeface.DEFAULT_BOLD
-                        run.isItalic -> Typeface.create(Typeface.DEFAULT, Typeface.ITALIC)
-                        else -> Typeface.DEFAULT
-                    }
-                    isUnderlineText = run.isUnderline
+                tempPaint.textSize = (run.fontSizePt * pxPerPt).coerceAtLeast(8f * scaleFactor)
+                tempPaint.typeface = when {
+                    run.isBold && run.isItalic -> Typeface.create(Typeface.DEFAULT, Typeface.BOLD_ITALIC)
+                    run.isBold -> Typeface.DEFAULT_BOLD
+                    run.isItalic -> Typeface.create(Typeface.DEFAULT, Typeface.ITALIC)
+                    else -> Typeface.DEFAULT
                 }
 
-                val runWidth = runPaint.measureText(run.text)
+                // Preserve individual words and spacing
+                val tokens = run.text.split(Regex("(?<=\\s)|(?=\\s)"))
+                for (token in tokens) {
+                    if (token.isEmpty()) continue
+                    val w = tempPaint.measureText(token)
+                    wordsInPara.add(WordRun(token, run, w))
+                }
+            }
 
-                // Highlight matching search text
-                if (searchQuery.isNotBlank() && run.text.contains(searchQuery, ignoreCase = true)) {
+            // Group tokens into wrapped lines
+            var currentLineWords = mutableListOf<WordRun>()
+            var currentLineWidth = 0f
+            var maxRunSizeInLine = 12f
+            var isFirstLine = true
+
+            for (wr in wordsInPara) {
+                // Check if adding this token overflows line
+                if (currentLineWidth + wr.width > effectiveLineWidth && currentLineWords.isNotEmpty()) {
+                    val lHeight = (maxRunSizeInLine * pxPerPt * 1.25f).coerceAtLeast(10f * scaleFactor)
+                    measuredLines.add(
+                        MeasuredLine(
+                            words = currentLineWords,
+                            lineWidth = currentLineWidth,
+                            lineHeight = lHeight,
+                            isFirstLineOfBullet = isFirstLine && para.isBullet,
+                            bulletChar = para.bulletChar,
+                            bulletIndent = bulletIndent,
+                            alignment = para.alignment
+                        )
+                    )
+                    isFirstLine = false
+                    currentLineWords = mutableListOf()
+                    currentLineWidth = 0f
+                    maxRunSizeInLine = 12f
+                }
+
+                // Skip leading whitespace on wrapped lines
+                if (currentLineWords.isEmpty() && wr.word.isBlank()) {
+                    continue
+                }
+
+                currentLineWords.add(wr)
+                currentLineWidth += wr.width
+                if (wr.run.fontSizePt > maxRunSizeInLine) {
+                    maxRunSizeInLine = wr.run.fontSizePt
+                }
+            }
+
+            if (currentLineWords.isNotEmpty()) {
+                val lHeight = (maxRunSizeInLine * pxPerPt * 1.25f).coerceAtLeast(10f * scaleFactor)
+                measuredLines.add(
+                    MeasuredLine(
+                        words = currentLineWords,
+                        lineWidth = currentLineWidth,
+                        lineHeight = lHeight,
+                        isFirstLineOfBullet = isFirstLine && para.isBullet,
+                        bulletChar = para.bulletChar,
+                        bulletIndent = bulletIndent,
+                        alignment = para.alignment
+                    )
+                )
+            }
+        }
+
+        // 2. Vertical Alignment (TOP, CENTER, BOTTOM)
+        val totalTextHeight = measuredLines.sumOf { it.lineHeight.toDouble() }.toFloat()
+        var yCursor = when (element.verticalAnchor) {
+            VerticalAnchor.CENTER -> (rect.centerY() - totalTextHeight / 2f).coerceAtLeast(rect.top + paddingY)
+            VerticalAnchor.BOTTOM -> (rect.bottom - paddingY - totalTextHeight).coerceAtLeast(rect.top + paddingY)
+            else -> rect.top + paddingY
+        }
+
+        // 3. Draw each line
+        val runPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
+        val bulletPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.rgb(15, 23, 42)
+            textSize = (13f * pxPerPt).coerceAtLeast(8f * scaleFactor)
+            typeface = Typeface.DEFAULT_BOLD
+        }
+
+        for (line in measuredLines) {
+            if (yCursor > canvas.height.toFloat()) break
+
+            var xStart = when (line.alignment) {
+                TextAlignment.CENTER -> (rect.centerX() - line.lineWidth / 2f).coerceAtLeast(rect.left + paddingX)
+                TextAlignment.RIGHT -> (rect.right - paddingX - line.lineWidth).coerceAtLeast(rect.left + paddingX)
+                else -> rect.left + paddingX + line.bulletIndent
+            }
+
+            // Draw bullet point if first line
+            if (line.isFirstLineOfBullet) {
+                val bulletX = rect.left + paddingX + (line.bulletIndent - 12f * pxPerPt).coerceAtLeast(0f)
+                canvas.drawText(line.bulletChar, bulletX, yCursor + line.lineHeight * 0.75f, bulletPaint)
+            }
+
+            var xCursor = xStart
+            for (wr in line.words) {
+                runPaint.color = wr.run.color.toArgb()
+                runPaint.textSize = (wr.run.fontSizePt * pxPerPt).coerceAtLeast(8f * scaleFactor)
+                runPaint.typeface = when {
+                    wr.run.isBold && wr.run.isItalic -> Typeface.create(Typeface.DEFAULT, Typeface.BOLD_ITALIC)
+                    wr.run.isBold -> Typeface.DEFAULT_BOLD
+                    wr.run.isItalic -> Typeface.create(Typeface.DEFAULT, Typeface.ITALIC)
+                    else -> Typeface.DEFAULT
+                }
+                runPaint.isUnderlineText = wr.run.isUnderline
+
+                // Search match highlight
+                if (searchQuery.isNotBlank() && wr.word.contains(searchQuery, ignoreCase = true)) {
                     val matchPaint = Paint().apply {
                         color = android.graphics.Color.argb(160, 250, 204, 21) // Gold highlight
                         style = Paint.Style.FILL
@@ -229,14 +476,14 @@ object SlideRasterizer {
                     val fm = runPaint.fontMetrics
                     val hlTop = yCursor + fm.ascent
                     val hlBottom = yCursor + fm.descent
-                    canvas.drawRect(xCursor, hlTop, xCursor + runWidth, hlBottom, matchPaint)
+                    canvas.drawRect(xCursor, hlTop, xCursor + wr.width, hlBottom, matchPaint)
                 }
 
-                canvas.drawText(run.text, xCursor, yCursor + baseTextSize * 0.85f, runPaint)
-                xCursor += runWidth
+                canvas.drawText(wr.word, xCursor, yCursor + line.lineHeight * 0.75f, runPaint)
+                xCursor += wr.width
             }
 
-            yCursor += lineHeight
+            yCursor += line.lineHeight
         }
     }
 
@@ -245,27 +492,37 @@ object SlideRasterizer {
         val rowHeight = rect.height() / rowCount
 
         val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = android.graphics.Color.rgb(203, 213, 225) // Light gray border
+            color = table.borderColor.toArgb()
             style = Paint.Style.STROKE
-            strokeWidth = 1f * scaleFactor
+            strokeWidth = (1f * scaleFactor).coerceAtLeast(1f)
         }
 
         val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             color = android.graphics.Color.rgb(30, 41, 59)
-            textSize = (13f * 1.5f * scaleFactor).coerceAtLeast(10f)
+            textSize = (13f * 1.4f * scaleFactor).coerceAtLeast(9f)
             typeface = Typeface.DEFAULT
         }
 
+        // Calculate column widths based on weights or uniform division
+        val firstRowCells = table.rows.firstOrNull()?.cells?.size ?: 1
+        val colCount = firstRowCells.coerceAtLeast(1)
+        val weights = if (table.colWidthWeights.size == colCount && table.colWidthWeights.all { it > 0 }) {
+            val sum = table.colWidthWeights.sum()
+            table.colWidthWeights.map { it / sum }
+        } else {
+            List(colCount) { 1f / colCount }
+        }
+
         table.rows.forEachIndexed { rIdx, row ->
-            val cellCount = row.cells.size.coerceAtLeast(1)
-            val cellWidth = rect.width() / cellCount
             val rTop = rect.top + rIdx * rowHeight
             val rBottom = rTop + rowHeight
 
+            var colLeft = rect.left
             row.cells.forEachIndexed { cIdx, cell ->
-                val cLeft = rect.left + cIdx * cellWidth
-                val cRight = cLeft + cellWidth
-                val cellRect = RectF(cLeft, rTop, cRight, rBottom)
+                val colFraction = weights.getOrElse(cIdx) { 1f / colCount }
+                val colWidth = rect.width() * colFraction
+                val colRight = colLeft + colWidth
+                val cellRect = RectF(colLeft, rTop, colRight, rBottom)
 
                 // Fill cell background
                 if (cell.fillColor != null) {
@@ -279,13 +536,45 @@ object SlideRasterizer {
                 // Cell border
                 canvas.drawRect(cellRect, borderPaint)
 
-                // Cell text
+                // Cell text with wrapping
                 if (cell.text.isNotBlank()) {
                     textPaint.color = cell.textColor.toArgb()
                     textPaint.typeface = if (cell.isBold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-                    val textY = cellRect.centerY() + textPaint.textSize * 0.35f
-                    canvas.drawText(cell.text, cellRect.left + 6f * scaleFactor, textY, textPaint)
+                    textPaint.textSize = (13f * 1.4f * scaleFactor).coerceAtLeast(9f)
+
+                    val maxCellWidth = (cellRect.width() - 8f * scaleFactor).coerceAtLeast(20f)
+                    val words = cell.text.split(" ")
+                    val lines = mutableListOf<String>()
+                    var curLine = ""
+
+                    for (w in words) {
+                        val testLine = if (curLine.isEmpty()) w else "$curLine $w"
+                        if (textPaint.measureText(testLine) <= maxCellWidth) {
+                            curLine = testLine
+                        } else {
+                            if (curLine.isNotEmpty()) lines.add(curLine)
+                            curLine = w
+                        }
+                    }
+                    if (curLine.isNotEmpty()) lines.add(curLine)
+
+                    val cellLineHeight = textPaint.textSize * 1.25f
+                    val totalH = lines.size * cellLineHeight
+                    var cellY = cellRect.centerY() - totalH / 2f + textPaint.textSize * 0.75f
+
+                    for (line in lines) {
+                        val lineW = textPaint.measureText(line)
+                        val lineX = when (cell.alignment) {
+                            TextAlignment.CENTER -> cellRect.centerX() - lineW / 2f
+                            TextAlignment.RIGHT -> cellRect.right - 4f * scaleFactor - lineW
+                            else -> cellRect.left + 4f * scaleFactor
+                        }
+                        canvas.drawText(line, lineX, cellY, textPaint)
+                        cellY += cellLineHeight
+                    }
                 }
+
+                colLeft = colRight
             }
         }
     }

@@ -72,5 +72,6 @@ dependencies {
     implementation(libs.pdfbox.android)
 
     testImplementation(libs.junit)
+    testImplementation("net.sf.kxml:kxml2:2.3.0")
     debugImplementation(libs.androidx.ui.tooling)
 }

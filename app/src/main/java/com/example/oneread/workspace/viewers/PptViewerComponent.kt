@@ -10,6 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -110,8 +111,8 @@ fun PptViewerComponent(
                     onUpdateTab(tab.copy(totalPages = count))
 
                     // Pre-render current slide
-                    val targetH = (1280 / model.aspectRatio).toInt()
-                    val bmp = SlideRasterizer.renderSlide(model.slides[currentSlideIndex], 1280, targetH)
+                    val targetH = (1920 / model.aspectRatio).toInt()
+                    val bmp = SlideRasterizer.renderSlide(model.slides[currentSlideIndex], 1920, targetH)
                     slideBitmaps.value = mapOf(currentSlideIndex to bmp)
                 } else {
                     errorMessage = "File not found"
@@ -131,8 +132,8 @@ fun PptViewerComponent(
         scope.launch(Dispatchers.IO) {
             try {
                 if (index in model.slides.indices) {
-                    val targetH = (1280 / model.aspectRatio).toInt()
-                    val bmp = SlideRasterizer.renderSlide(model.slides[index], 1280, targetH)
+                    val targetH = (1920 / model.aspectRatio).toInt()
+                    val bmp = SlideRasterizer.renderSlide(model.slides[index], 1920, targetH)
                     slideBitmaps.value = slideBitmaps.value + (index to bmp)
                 }
             } catch (_: Exception) { }
@@ -218,11 +219,11 @@ fun PptViewerComponent(
             DocumentErrorState(errorMessage ?: "Error loading PowerPoint")
         } else {
             // Main Slide Stage
-            Box(
+            BoxWithConstraints(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(16.dp),
+                    .padding(8.dp),
                 contentAlignment = Alignment.Center
             ) {
                 val currentBitmap = slideBitmaps.value[currentSlideIndex]
@@ -230,12 +231,25 @@ fun PptViewerComponent(
                     renderSlide(currentSlideIndex)
                 }
 
+                val presRatio = presentationModel?.aspectRatio ?: (16f / 9f)
+                val containerW = maxWidth
+                val containerH = maxHeight
+                val containerRatio = if (containerH.value > 0) containerW.value / containerH.value else 1f
+                val (targetW, targetH) = if (containerRatio > presRatio) {
+                    val h = containerH
+                    val w = h * presRatio
+                    w to h
+                } else {
+                    val w = containerW
+                    val h = w / presRatio
+                    w to h
+                }
+
                 Surface(
                     modifier = Modifier
-                        .fillMaxWidth(0.95f)
-                        .aspectRatio(presentationModel?.aspectRatio ?: (16f / 9f))
-                        .shadow(12.dp, RoundedCornerShape(8.dp)),
-                    shape = RoundedCornerShape(8.dp),
+                        .size(targetW, targetH)
+                        .shadow(8.dp, RoundedCornerShape(4.dp)),
+                    shape = RoundedCornerShape(4.dp),
                     color = Color.White
                 ) {
                     if (currentBitmap != null) {
@@ -243,7 +257,7 @@ fun PptViewerComponent(
                             bitmap = currentBitmap.asImageBitmap(),
                             contentDescription = "Slide ${currentSlideIndex + 1}",
                             modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Fit
+                            contentScale = ContentScale.FillBounds
                         )
                     } else {
                         Box(contentAlignment = Alignment.Center) {
