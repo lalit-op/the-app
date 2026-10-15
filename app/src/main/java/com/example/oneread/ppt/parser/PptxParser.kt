@@ -341,6 +341,8 @@ object PptxParser {
         // omits font attributes. Resetting every run to 14pt loses the title/body sizing
         // authored by PowerPoint and makes otherwise correct slides look miniature.
         var paragraphDefaultRunSize = 14f
+        var paragraphDefaultRunSizeExplicit = false
+        var currentRunSizeExplicit = false
         var paragraphDefaultRunBold = false
         var paragraphDefaultRunItalic = false
         var paragraphDefaultRunUnderline = false
@@ -556,6 +558,7 @@ object PptxParser {
                             currentParaBulletChar = "•"
                             currentParaBulletLevel = 0
                             paragraphDefaultRunSize = 14f
+                            paragraphDefaultRunSizeExplicit = false
                             paragraphDefaultRunBold = false
                             paragraphDefaultRunItalic = false
                             paragraphDefaultRunUnderline = false
@@ -596,6 +599,7 @@ object PptxParser {
                             inDefRPr = true
                             parser.getAttributeValue(null, "sz")?.toFloatOrNull()?.let {
                                 paragraphDefaultRunSize = (it / 100f).coerceIn(8f, 72f)
+                                paragraphDefaultRunSizeExplicit = true
                             }
                             parser.getAttributeValue(null, "b")?.let {
                                 paragraphDefaultRunBold = it == "1" || it.equals("true", ignoreCase = true)
@@ -610,6 +614,7 @@ object PptxParser {
                         "r" -> {
                             inRun = true
                             currentRunSize = paragraphDefaultRunSize
+                            currentRunSizeExplicit = paragraphDefaultRunSizeExplicit
                             currentRunBold = paragraphDefaultRunBold
                             currentRunItalic = paragraphDefaultRunItalic
                             currentRunUnderline = paragraphDefaultRunUnderline
@@ -619,6 +624,7 @@ object PptxParser {
                         "rPr" -> {
                             parser.getAttributeValue(null, "sz")?.toFloatOrNull()?.let {
                                 currentRunSize = (it / 100f).coerceIn(8f, 72f)
+                                currentRunSizeExplicit = true
                             }
                             parser.getAttributeValue(null, "b")?.let {
                                 currentRunBold = it == "1" || it.equals("true", ignoreCase = true)
@@ -643,10 +649,25 @@ object PptxParser {
                                 if (inTc) {
                                     currentCellText.append(text).append(" ")
                                 }
+                                // PowerPoint placeholder font sizes are commonly inherited
+                                // from slide layouts/masters and therefore absent from slide XML.
+                                // Apply a role-aware fallback only when no explicit size exists on
+                                // the paragraph default or run; preserve all authored sizes.
+                                val effectiveRunSize = if (currentRunSizeExplicit) {
+                                    currentRunSize
+                                } else {
+                                    when (phType) {
+                                        "title", "ctrtitle" -> 28f
+                                        "subtitle" -> 20f
+                                        "body", "obj" -> 20f
+                                        "ftr", "footer", "sldnum", "dt" -> 10f
+                                        else -> currentRunSize
+                                    }
+                                }
                                 currentParaRuns.add(
                                     SlideTextRun(
                                         text = text,
-                                        fontSizePt = currentRunSize,
+                                        fontSizePt = effectiveRunSize,
                                         isBold = currentRunBold,
                                         isItalic = currentRunItalic,
                                         isUnderline = currentRunUnderline,
