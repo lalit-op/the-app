@@ -119,9 +119,13 @@ fun PptViewerScreen(
     var viewMode by remember { mutableStateOf(PptViewMode.NORMAL) }
     var fitMode by remember { mutableStateOf(PptFitMode.FIT_SCREEN) }
     var showThumbnailStrip by remember { mutableStateOf(true) }
+    val initialTabZoom = viewModel.tabManager.activeTab?.zoomLevel ?: 1.0f
     // Continuous mode mirrors document readers: fit each slide to the viewport width
-    // and let the reader scroll vertically through the entire deck.
-    var continuousScrollMode by remember { mutableStateOf(true) }
+    // and let the reader scroll vertically through the entire deck by default.
+    // Preserve single-slide mode when the user previously saved a zoom above 100%.
+    var continuousScrollMode by remember(liveDocument.id) {
+        mutableStateOf(initialTabZoom <= 1.0f)
+    }
 
     // Search state
     var isSearchActive by remember { mutableStateOf(false) }
@@ -134,7 +138,6 @@ fun PptViewerScreen(
     var isFullscreen by remember { mutableStateOf(false) }
 
     // Zoom state (Default: 100% / 1.0f)
-    val initialTabZoom = viewModel.tabManager.activeTab?.zoomLevel ?: 1.0f
     var zoomLevel by remember(liveDocument.id) {
         mutableFloatStateOf(if (initialTabZoom in 0.5f..3.0f) initialTabZoom else 1.0f)
     }
@@ -319,13 +322,17 @@ fun PptViewerScreen(
     }
 
     val totalSlides = presentation?.slides?.size ?: 0
-    val pagerState = rememberPagerState(
-        initialPage = (liveDocument.lastReadPage - 1).coerceIn(0, (totalSlides - 1).coerceAtLeast(0)),
-        pageCount = { totalSlides.coerceAtLeast(1) }
-    )
-    val slideListState = rememberLazyListState(
-        initialFirstVisibleItemIndex = (liveDocument.lastReadPage - 1).coerceAtLeast(0)
-    )
+    val pagerState = key(liveDocument.id) {
+        rememberPagerState(
+            initialPage = (liveDocument.lastReadPage - 1).coerceIn(0, (totalSlides - 1).coerceAtLeast(0)),
+            pageCount = { totalSlides.coerceAtLeast(1) }
+        )
+    }
+    val slideListState = key(liveDocument.id) {
+        rememberLazyListState(
+            initialFirstVisibleItemIndex = (liveDocument.lastReadPage - 1).coerceAtLeast(0)
+        )
+    }
 
     fun navigateToSlide(index: Int) {
         val last = (presentation?.slides?.lastIndex ?: 0).coerceAtLeast(0)
@@ -1158,7 +1165,7 @@ fun PptViewerScreen(
                                         if (continuousScrollMode) {
                                             continuousScrollMode = false
                                         } else {
-                                            zoomLevel = 1.0f
+                                            setZoom(1.0f)
                                             offset = Offset.Zero
                                             continuousScrollMode = true
                                         }
