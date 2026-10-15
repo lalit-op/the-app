@@ -960,7 +960,7 @@ fun PptViewerScreen(
 
                             // Floating Slide Pill Indicator (e.g. "Slide 7 of 42")
                             androidx.compose.animation.AnimatedVisibility(
-                                visible = !isFullscreen && totalSlides > 0 && !showThumbnailStrip,
+                                visible = !continuousScrollMode && !isFullscreen && totalSlides > 0 && !showThumbnailStrip,
                                 enter = fadeIn(),
                                 exit = fadeOut(),
                                 modifier = Modifier
