@@ -568,13 +568,35 @@ object ExcelDocumentLoader {
      */
     private fun parseLegacyXls(file: File, onProgress: ((String) -> Unit)? = null): ExcelWorkbookModel {
         onProgress?.invoke("Reading legacy Excel .xls...")
-        val workbook = ExcelWorkbookModel(fileName = file.name, filePath = file.absolutePath)
-        val sheet = ExcelSheetModel(name = "Sheet1", index = 0)
 
-        // Many enterprise .xls files are actually HTML table or TSV files disguised as .xls
-        val textSample = runCatching { file.bufferedReader().use { it.readText().take(5000) } }.getOrDefault("")
+        // Classic BIFF .xls files are OLE2 compound binaries. They must not be
+        // passed through a text/CSV parser; doing so creates a grid of corrupted bytes.
+        val header = ByteArray(8)
+        val headerSize = runCatching {
+            file.inputStream().use { input -> input.read(header) }
+        }.getOrDefault(-1)
+        val ole2Signature = byteArrayOf(
+            0xD0.toByte(), 0xCF.toByte(), 0x11.toByte(), 0xE0.toByte(),
+            0xA1.toByte(), 0xB1.toByte(), 0x1A.toByte(), 0xE1.toByte()
+        )
+        if (headerSize >= ole2Signature.size && header.contentEquals(ole2Signature)) {
+            throw IllegalArgumentException(
+                "This is a legacy binary .xls workbook. Convert it to .xlsx or CSV to open it in HR Read."
+            )
+        }
+
+        val textSample = runCatching {
+            file.bufferedReader(Charsets.UTF_8).use { it.readText().take(5000) }
+        }.getOrDefault("")
+        if (textSample.contains('\u0000')) {
+            throw IllegalArgumentException("The .xls file is binary or corrupted and cannot be read as a spreadsheet.")
+        }
+
+        // Some applications export HTML tables with an .xls extension. Continue to
+        // support that interoperable text format without pretending to decode BIFF.
         if (textSample.contains("<table", ignoreCase = true) || textSample.contains("<tr", ignoreCase = true)) {
-            // HTML Table parser
+            val workbook = ExcelWorkbookModel(fileName = file.name, filePath = file.absolutePath)
+            val sheet = ExcelSheetModel(name = "Sheet1", index = 0)
             var row = 1
             var maxCol = 1
             val trRegex = Regex("<tr[ >](.*?)(</tr>|$)", RegexOption.DOT_MATCHES_ALL)
@@ -583,25 +605,37 @@ object ExcelDocumentLoader {
             for (trMatch in trRegex.findAll(textSample)) {
                 var col = 1
                 for (tdMatch in tdRegex.findAll(trMatch.value)) {
-                    val rawContent = tdMatch.groupValues[2].replace(Regex("<[^>]*>"), "").trim()
+                    val rawContent = tdMatch.groupValues[2]
+                        .replace(Regex("<[^>]*>"), "")
+                        .replace("&nbsp;", " ", ignoreCase = true)
+                        .replace("&amp;", "&")
+                        .replace("&lt;", "<")
+                        .replace("&gt;", ">")
+                        .trim()
                     sheet.setCell(
                         ExcelCellModel(
                             row = row,
                             col = col,
                             rawValue = rawContent,
-                            style = CellStyle(isBold = row == 1 || tdMatch.value.contains("<th"))
+                            style = CellStyle(isBold = row == 1 || tdMatch.value.contains("<th", ignoreCase = true))
                         )
                     )
                     col++
                 }
-                maxCol = maxOf(maxCol, col)
+                maxCol = maxOf(maxCol, col - 1)
                 row++
             }
-            workbook.sheets.add(sheet.copy(maxRow = row + 5, maxCol = maxCol + 2))
-            return workbook
+            if (row > 1) {
+                workbook.sheets.add(sheet.copy(maxRow = row + 4, maxCol = maxCol + 2))
+                return workbook
+            }
         }
 
-        // Fallback: parse lines
+        // Text-exported CSV/TSV may carry an .xls suffix; do not silently accept
+        // arbitrary binary content as delimited text.
+        if (textSample.isBlank()) {
+            throw IllegalArgumentException("The .xls file is empty or is not a supported text spreadsheet.")
+        }
         return parseCsvWorkbook(file, onProgress)
     }
 
