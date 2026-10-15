@@ -332,6 +332,7 @@ object PptxParser {
         // Current text state
         var textParagraphs = mutableListOf<SlideParagraph>()
         var currentParaRuns = mutableListOf<SlideTextRun>()
+        var currentParaRunExplicitSizes = mutableListOf<Boolean>()
         var currentParaAlign = TextAlignment.LEFT
         var currentParaIsBullet = false
         var currentParaBulletChar = "•"
@@ -349,6 +350,7 @@ object PptxParser {
         var inDefaultRunProps = false
 
         var currentRunSize = 14f
+        var currentRunHasExplicitSize = false
         var currentRunBold = false
         var currentRunItalic = false
         var currentRunUnderline = false
@@ -551,6 +553,7 @@ object PptxParser {
                         "p" -> {
                             inParagraph = true
                             currentParaRuns = mutableListOf()
+                            currentParaRunExplicitSizes = mutableListOf()
                             currentParaAlign = TextAlignment.LEFT
                             currentParaIsBullet = false
                             currentParaBulletChar = "•"
@@ -594,6 +597,7 @@ object PptxParser {
                         }
                         "r" -> {
                             inRun = true
+                            currentRunHasExplicitSize = false
                             currentRunSize = paragraphDefaultSize
                             currentRunBold = paragraphDefaultBold
                             currentRunItalic = paragraphDefaultItalic
@@ -619,6 +623,7 @@ object PptxParser {
                         "rPr" -> {
                             parser.getAttributeValue(null, "sz")?.toFloatOrNull()?.let {
                                 currentRunSize = (it / 100f).coerceIn(6f, 96f)
+                                currentRunHasExplicitSize = true
                             }
                             parser.getAttributeValue(null, "b")?.let {
                                 currentRunBold = it == "1" || it.equals("true", true)
@@ -629,6 +634,20 @@ object PptxParser {
                             }
                             parser.getAttributeValue(null, "u")?.let {
                                 currentRunUnderline = it != "none"
+                            }
+                        }
+                        "endParaRPr" -> {
+                            // In many Office files the visible text size is only expressed
+                            // on a:endParaRPr while a:rPr omits sz. Apply it only to runs
+                            // which did not declare their own font size.
+                            val sz = parser.getAttributeValue(null, "sz")?.toFloatOrNull()
+                            if (sz != null) {
+                                val paragraphSize = (sz / 100f).coerceIn(6f, 96f)
+                                currentParaRuns = currentParaRuns.mapIndexed { idx, run ->
+                                    if (currentParaRunExplicitSizes.getOrNull(idx) == false) {
+                                        run.copy(fontSizePt = paragraphSize)
+                                    } else run
+                                }.toMutableList()
                             }
                         }
                         "latin" -> {
@@ -653,6 +672,7 @@ object PptxParser {
                                         fontFamily = currentRunFamily
                                     )
                                 )
+                                currentParaRunExplicitSizes.add(currentRunHasExplicitSize)
                                 searchableTextBuilder.append(text).append(" ")
                             }
                         }
