@@ -517,12 +517,12 @@ fun PptViewerScreen(
                                         if (tapOffset.x > width * 0.6f) {
                                             // Tap right side -> Next slide
                                             if (pagerState.currentPage < totalSlides - 1) {
-                                                coroutineScope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
+                                                navigateToSlide(pagerState.currentPage + 1)
                                             }
                                         } else if (tapOffset.x < width * 0.4f) {
                                             // Tap left side -> Previous slide
                                             if (pagerState.currentPage > 0) {
-                                                coroutineScope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) }
+                                                navigateToSlide(pagerState.currentPage - 1)
                                             }
                                         }
                                     }
@@ -661,23 +661,27 @@ fun PptViewerScreen(
                                 .weight(1f)
                                 .fillMaxWidth()
                                 .clipToBounds()
-                                .pointerInput(Unit) {
+                                .pointerInput(continuousScrollMode, isSearchActive, zoomLevel) {
                                     detectTapGestures(
                                         onTap = {
-                                            if (isSearchActive) {
-                                                isSearchActive = false
-                                                searchQuery = ""
-                                                searchMatches = emptyList()
-                                                currentMatchIndex = -1
-                                            } else {
-                                                isFullscreen = !isFullscreen
+                                            if (!continuousScrollMode) {
+                                                if (isSearchActive) {
+                                                    isSearchActive = false
+                                                    searchQuery = ""
+                                                    searchMatches = emptyList()
+                                                    currentMatchIndex = -1
+                                                } else {
+                                                    isFullscreen = !isFullscreen
+                                                }
                                             }
                                         },
                                         onDoubleTap = {
-                                            if (zoomLevel > 1.05f) {
-                                                resetZoom()
-                                            } else {
-                                                setZoom(2.0f)
+                                            if (!continuousScrollMode) {
+                                                if (zoomLevel > 1.05f) {
+                                                    resetZoom()
+                                                } else {
+                                                    setZoom(2.0f)
+                                                }
                                             }
                                         }
                                     )
@@ -755,9 +759,70 @@ fun PptViewerScreen(
                                 },
                             contentAlignment = Alignment.Center
                         ) {
-                            HorizontalPager(
-                                state = pagerState,
-                                userScrollEnabled = zoomLevel <= 1.05f,
+                            if (continuousScrollMode) {
+                                LazyColumn(
+                                    state = slideListState,
+                                    modifier = Modifier.fillMaxSize(),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    contentPadding = PaddingValues(
+                                        horizontal = if (isFullscreen) 0.dp else 8.dp,
+                                        vertical = if (isFullscreen) 0.dp else 8.dp
+                                    ),
+                                    verticalArrangement = Arrangement.spacedBy(if (isFullscreen) 0.dp else 12.dp)
+                                ) {
+                                    itemsIndexed(
+                                        items = pres.slides,
+                                        key = { index, slide -> "${pres.title}-slide-${index}-${slide.slideNumber}" }
+                                    ) { pageIndex, slide ->
+                                        var slideBitmap by remember(pageIndex, pres) { mutableStateOf<Bitmap?>(null) }
+
+                                        LaunchedEffect(pageIndex, pres, searchQuery) {
+                                            withContext(Dispatchers.IO) {
+                                                val bmp = getOrRenderSlideBitmap(
+                                                    pageIndex,
+                                                    1920,
+                                                    (1920 / pres.aspectRatio).roundToInt()
+                                                )
+                                                withContext(Dispatchers.Main) { slideBitmap = bmp }
+                                            }
+                                        }
+
+                                        BoxWithConstraints(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .aspectRatio(pres.aspectRatio.coerceIn(0.4f, 3f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (slideBitmap != null) {
+                                                Surface(
+                                                    modifier = Modifier.fillMaxSize(),
+                                                    shape = RoundedCornerShape(if (isFullscreen) 0.dp else 4.dp),
+                                                    shadowElevation = if (isFullscreen) 0.dp else 8.dp
+                                                ) {
+                                                    Image(
+                                                        bitmap = slideBitmap!!.asImageBitmap(),
+                                                        contentDescription = "Slide ${pageIndex + 1}: ${slide.title}",
+                                                        contentScale = ContentScale.FillBounds,
+                                                        modifier = Modifier.fillMaxSize()
+                                                    )
+                                                }
+                                            } else {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .background(Color(0xFF111827)),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    CircularProgressIndicator(color = Color(0xFFEA580C))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                HorizontalPager(
+                                    state = pagerState,
+                                    userScrollEnabled = zoomLevel <= 1.05f,
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .graphicsLayer(
@@ -821,6 +886,7 @@ fun PptViewerScreen(
                                             }
                                         }
                                     }
+                                }
                                 }
                             }
 
@@ -905,7 +971,7 @@ fun PptViewerScreen(
                                 currentSlideIndex = pagerState.currentPage,
                                 thumbnailCache = thumbnailBitmapCache,
                                 onSelectSlide = { idx ->
-                                    coroutineScope.launch { pagerState.animateScrollToPage(idx) }
+                                    coroutineScope.launch { navigateToSlide(idx) }
                                 },
                                 modifier = Modifier.testTag("ppt_bottom_thumbnail_strip")
                             )
@@ -1053,6 +1119,25 @@ fun PptViewerScreen(
                                         viewMode = PptViewMode.SLIDE_SORTER
                                     },
                                     modifier = Modifier.testTag("menu_slide_sorter")
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (continuousScrollMode) "Use Single-Slide View" else "Use Continuous Scroll") },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = if (continuousScrollMode) Icons.Default.ViewCarousel else Icons.Default.ViewDay,
+                                            contentDescription = null,
+                                            tint = Color(0xFF38BDF8)
+                                        )
+                                    },
+                                    onClick = {
+                                        onDismiss()
+                                        if (continuousScrollMode) {
+                                            continuousScrollMode = false
+                                        } else {
+                                            continuousScrollMode = true
+                                        }
+                                    },
+                                    modifier = Modifier.testTag("menu_toggle_continuous_scroll")
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Speaker Notes") },
@@ -1256,7 +1341,7 @@ fun PptViewerScreen(
                         val num = pageInput.toIntOrNull()
                         if (num != null && num in 1..totalSlides) {
                             coroutineScope.launch {
-                                pagerState.animateScrollToPage(num - 1)
+                                navigateToSlide(num - 1)
                             }
                         }
                         showJumpDialog = false
