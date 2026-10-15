@@ -57,6 +57,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -77,6 +78,7 @@ import com.example.oneread.word.model.DocxTableRow
 import com.example.oneread.word.parser.DocxParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import android.net.Uri
 import java.io.File
 
 /**
@@ -99,6 +101,7 @@ fun WordDocumentRenderer(
     registerSearchNavigators: (onNext: () -> Unit, onPrev: () -> Unit) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     var isLoading by remember { mutableStateOf(true) }
     var parsedDoc by remember { mutableStateOf<DocxDocument?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -109,22 +112,48 @@ fun WordDocumentRenderer(
     var offsetY by remember { mutableFloatStateOf(0f) }
     val scrollState = rememberScrollState()
 
-    LaunchedEffect(document.path, document.uri) {
-        withContext(Dispatchers.IO) {
-            try {
-                isLoading = true
-                val file = File(document.path)
-                if (file.exists() && file.canRead()) {
-                    val result = DocxParser.parse(file)
-                    parsedDoc = result
-                } else {
-                    errorMessage = "Unable to read document file."
+    LaunchedEffect(document.path, document.uri, document.title, document.extension) {
+        isLoading = true
+        parsedDoc = null
+        errorMessage = null
+        try {
+            val result = withContext(Dispatchers.IO) {
+                val extension = document.extension
+                    .ifBlank { document.title.substringAfterLast('.', "") }
+                    .lowercase()
+                if (extension !in setOf("docx", "docm", "dotx", "dotm", "rtf")) {
+                    throw IllegalArgumentException(
+                        "This reader supports DOCX-family OpenXML files and RTF. " +
+                            "The .${extension.ifBlank { "(unknown)" }} format needs a compatible converter."
+                    )
                 }
-            } catch (e: Exception) {
-                errorMessage = "Error opening Word document: ${e.message}"
-            } finally {
-                isLoading = false
+
+                val pathFile = File(document.path)
+                val inputFile = if (pathFile.isFile && pathFile.canRead()) {
+                    pathFile
+                } else {
+                    if (document.uri.isBlank()) {
+                        throw IllegalArgumentException("Unable to read this Word document. Reopen it from the file picker.")
+                    }
+                    val uri = Uri.parse(document.uri)
+                    val cacheFile = File(context.cacheDir, "word_screen_${document.id}.$extension")
+                    val input = context.contentResolver.openInputStream(uri)
+                        ?: throw IllegalArgumentException("Android could not open the selected Word document.")
+                    input.use { source ->
+                        cacheFile.outputStream().use { sink -> source.copyTo(sink) }
+                    }
+                    if (!cacheFile.isFile || cacheFile.length() == 0L) {
+                        throw IllegalArgumentException("The selected Word document is empty or could not be copied.")
+                    }
+                    cacheFile
+                }
+                DocxParser.parse(inputFile)
             }
+            parsedDoc = result
+        } catch (e: Exception) {
+            errorMessage = e.message ?: "Error opening Word document."
+        } finally {
+            isLoading = false
         }
     }
 

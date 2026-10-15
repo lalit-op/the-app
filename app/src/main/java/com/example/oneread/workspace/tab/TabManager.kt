@@ -1,6 +1,7 @@
 package com.example.oneread.workspace.tab
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import com.example.oneread.data.DocumentItem
 import com.example.oneread.workspace.docmanager.FileDetector
@@ -93,6 +94,16 @@ class TabManager(private val context: Context) {
     }
 
     fun openFile(uri: Uri, fileName: String? = null, activate: Boolean = true): DocumentTab {
+        // OpenDocument/OpenMultipleDocuments grants can be persisted so restored tabs
+        // still have access after the app process is recreated.
+        if (uri.scheme == "content") {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+        }
         val name = fileName ?: FileDetector.getFileNameFromUri(context, uri)
         val format = FileDetector.detectFormat(name)
         val currentList = _tabs.value.toMutableList()

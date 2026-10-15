@@ -183,6 +183,92 @@ class PptParserAndRenderingTest {
 
         val leftBraceShape = shapeElements.find { it.shapeType == ShapeType.LEFT_BRACE }
         assertNotNull("Should parse leftBrace shape geometry", leftBraceShape)
+        assertTrue(
+            "Horizontal connectors with zero height must be retained",
+            shapeElements.any { it.shapeType == ShapeType.LINE || it.shapeType == ShapeType.CONNECTOR }
+        )
+    }
+
+    @Test
+    fun testRunInheritsDefaultParagraphFontStyleWhenRunPropertiesOmitFontSize() {
+        val presXml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+                <p:sldSz cx="12192000" cy="6858000"/>
+                <p:sldIdLst>
+                    <p:sldId id="1" r:id="rId1" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>
+                </p:sldIdLst>
+            </p:presentation>"""
+
+        val slideXml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                   xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                <p:cSld>
+                    <p:spTree>
+                        <p:sp>
+                            <p:spPr>
+                                <a:xfrm><a:off x="1000000" y="500000"/><a:ext cx="9000000" cy="1500000"/></a:xfrm>
+                                <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+                            </p:spPr>
+                            <p:txBody>
+                                <a:bodyPr/>
+                                <a:lstStyle/>
+                                <a:p>
+                                    <a:pPr>
+                                        <a:defRPr sz="3600" b="1">
+                                            <a:solidFill><a:srgbClr val="123456"/></a:solidFill>
+                                        </a:defRPr>
+                                    </a:pPr>
+                                    <a:r>
+                                        <a:rPr lang="en-US"/>
+                                        <a:t>Inherited Heading</a:t>
+                                    </a:r>
+                                </a:p>
+                            </p:txBody>
+                        </p:sp>
+                    </p:spTree>
+                </p:cSld>
+            </p:sld>"""
+
+        val file = createSamplePptx(presXml, mapOf("slides/slide1.xml" to slideXml))
+        val pres = PptxParser.parse(file)
+        val run = pres.slides.single().elements.filterIsInstance<TextElement>()
+            .single().paragraphs.single().runs.single()
+
+        assertEquals(36f, run.fontSizePt, 0.01f)
+        assertTrue("Run should inherit bold from a:defRPr", run.isBold)
+    }
+
+    @Test
+    fun testTitlePlaceholderUsesReadableFallbackFontWhenMasterStylesAreAbsent() {
+        val presXml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+                <p:sldSz cx="12192000" cy="6858000"/>
+                <p:sldIdLst>
+                    <p:sldId id="1" r:id="rId1" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>
+                </p:sldIdLst>
+            </p:presentation>"""
+        val slideXml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                   xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                <p:cSld><p:spTree>
+                    <p:sp>
+                        <p:nvSpPr>
+                            <p:cNvPr id="2" name="Title 1"/>
+                            <p:cNvSpPr/>
+                            <p:nvPr><p:ph type="title"/></p:nvPr>
+                        </p:nvSpPr>
+                        <p:spPr><a:xfrm><a:off x="1000000" y="500000"/><a:ext cx="9000000" cy="1500000"/></a:xfrm></p:spPr>
+                        <p:txBody><a:bodyPr/><a:lstStyle/><a:p>
+                            <a:r><a:rPr lang="en-US"/><a:t>Outline</a:t></a:r>
+                        </a:p></p:txBody>
+                    </p:sp>
+                </p:spTree></p:cSld>
+            </p:sld>"""
+        val file = createSamplePptx(presXml, mapOf("slides/slide1.xml" to slideXml))
+        val run = PptxParser.parse(file).slides.single().elements.filterIsInstance<TextElement>()
+            .single().paragraphs.single().runs.single()
+
+        assertEquals(28f, run.fontSizePt, 0.01f)
     }
 
     @Test

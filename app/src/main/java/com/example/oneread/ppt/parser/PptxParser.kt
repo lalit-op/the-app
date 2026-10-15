@@ -337,6 +337,19 @@ object PptxParser {
         var currentParaBulletChar = "•"
         var currentParaBulletLevel = 0
 
+        // Paragraph default run properties are inherited by runs whose <a:rPr>
+        // omits font attributes. Resetting every run to 14pt loses the title/body sizing
+        // authored by PowerPoint and makes otherwise correct slides look miniature.
+        var paragraphDefaultRunSize = 14f
+        var paragraphDefaultRunSizeExplicit = false
+        var currentRunSizeExplicit = false
+        var paragraphDefaultRunBold = false
+        var paragraphDefaultRunItalic = false
+        var paragraphDefaultRunUnderline = false
+        var paragraphDefaultRunColor = Color(0xFF1E293B)
+        var paragraphDefaultRunFamily: String? = null
+        var inDefRPr = false
+
         var currentRunSize = 14f
         var currentRunBold = false
         var currentRunItalic = false
@@ -473,6 +486,8 @@ object PptxParser {
                                     backgroundColor = clr
                                 } else if (inTcPr) {
                                     currentCellFillColor = clr
+                                } else if (inDefRPr) {
+                                    paragraphDefaultRunColor = clr
                                 } else if (inRun) {
                                     currentRunColor = clr
                                     if (inTc) currentCellTextColor = clr
@@ -491,6 +506,8 @@ object PptxParser {
                                     backgroundColor = clr
                                 } else if (inTcPr) {
                                     currentCellFillColor = clr
+                                } else if (inDefRPr) {
+                                    paragraphDefaultRunColor = clr
                                 } else if (inRun) {
                                     currentRunColor = clr
                                     if (inTc) currentCellTextColor = clr
@@ -540,6 +557,13 @@ object PptxParser {
                             currentParaIsBullet = false
                             currentParaBulletChar = "•"
                             currentParaBulletLevel = 0
+                            paragraphDefaultRunSize = 14f
+                            paragraphDefaultRunSizeExplicit = false
+                            paragraphDefaultRunBold = false
+                            paragraphDefaultRunItalic = false
+                            paragraphDefaultRunUnderline = false
+                            paragraphDefaultRunColor = Color(0xFF1E293B)
+                            paragraphDefaultRunFamily = null
                         }
                         "pPr" -> {
                             val algn = parser.getAttributeValue(null, "algn")
@@ -571,28 +595,53 @@ object PptxParser {
                         "buNone" -> {
                             currentParaIsBullet = false
                         }
+                        "defRPr" -> {
+                            inDefRPr = true
+                            parser.getAttributeValue(null, "sz")?.toFloatOrNull()?.let {
+                                paragraphDefaultRunSize = (it / 100f).coerceIn(8f, 72f)
+                                paragraphDefaultRunSizeExplicit = true
+                            }
+                            parser.getAttributeValue(null, "b")?.let {
+                                paragraphDefaultRunBold = it == "1" || it.equals("true", ignoreCase = true)
+                            }
+                            parser.getAttributeValue(null, "i")?.let {
+                                paragraphDefaultRunItalic = it == "1" || it.equals("true", ignoreCase = true)
+                            }
+                            parser.getAttributeValue(null, "u")?.let {
+                                paragraphDefaultRunUnderline = it != "none" && it != "0"
+                            }
+                        }
                         "r" -> {
                             inRun = true
-                            currentRunSize = 14f
-                            currentRunBold = false
-                            currentRunItalic = false
-                            currentRunUnderline = false
-                            currentRunColor = Color(0xFF1E293B)
-                            currentRunFamily = null
+                            currentRunSize = paragraphDefaultRunSize
+                            currentRunSizeExplicit = paragraphDefaultRunSizeExplicit
+                            currentRunBold = paragraphDefaultRunBold
+                            currentRunItalic = paragraphDefaultRunItalic
+                            currentRunUnderline = paragraphDefaultRunUnderline
+                            currentRunColor = paragraphDefaultRunColor
+                            currentRunFamily = paragraphDefaultRunFamily
                         }
                         "rPr" -> {
-                            val sz = parser.getAttributeValue(null, "sz")?.toFloatOrNull()
-                            if (sz != null) currentRunSize = (sz / 100f).coerceIn(8f, 72f)
-                            val b = parser.getAttributeValue(null, "b")
-                            currentRunBold = (b == "1" || b == "true")
+                            parser.getAttributeValue(null, "sz")?.toFloatOrNull()?.let {
+                                currentRunSize = (it / 100f).coerceIn(8f, 72f)
+                                currentRunSizeExplicit = true
+                            }
+                            parser.getAttributeValue(null, "b")?.let {
+                                currentRunBold = it == "1" || it.equals("true", ignoreCase = true)
+                            }
                             if (inTc && currentRunBold) currentCellBold = true
-                            val i = parser.getAttributeValue(null, "i")
-                            currentRunItalic = (i == "1" || i == "true")
-                            val u = parser.getAttributeValue(null, "u")
-                            currentRunUnderline = (u != null && u != "none")
+                            parser.getAttributeValue(null, "i")?.let {
+                                currentRunItalic = it == "1" || it.equals("true", ignoreCase = true)
+                            }
+                            parser.getAttributeValue(null, "u")?.let {
+                                currentRunUnderline = it != "none" && it != "0"
+                            }
                         }
                         "latin" -> {
-                            currentRunFamily = parser.getAttributeValue(null, "typeface")
+                            val family = parser.getAttributeValue(null, "typeface")
+                            if (!family.isNullOrBlank()) {
+                                if (inDefRPr) paragraphDefaultRunFamily = family else currentRunFamily = family
+                            }
                         }
                         "t" -> {
                             val text = parser.nextText()
@@ -600,10 +649,25 @@ object PptxParser {
                                 if (inTc) {
                                     currentCellText.append(text).append(" ")
                                 }
+                                // PowerPoint placeholder font sizes are commonly inherited
+                                // from slide layouts/masters and therefore absent from slide XML.
+                                // Apply a role-aware fallback only when no explicit size exists on
+                                // the paragraph default or run; preserve all authored sizes.
+                                val effectiveRunSize = if (currentRunSizeExplicit) {
+                                    currentRunSize
+                                } else {
+                                    when (phType) {
+                                        "title", "ctrtitle" -> 28f
+                                        "subtitle" -> 20f
+                                        "body", "obj" -> 20f
+                                        "ftr", "footer", "sldnum", "dt" -> 10f
+                                        else -> currentRunSize
+                                    }
+                                }
                                 currentParaRuns.add(
                                     SlideTextRun(
                                         text = text,
-                                        fontSizePt = currentRunSize,
+                                        fontSizePt = effectiveRunSize,
                                         isBold = currentRunBold,
                                         isItalic = currentRunItalic,
                                         isUnderline = currentRunUnderline,
@@ -621,6 +685,7 @@ object PptxParser {
                         "bg" -> inBg = false
                         "ln" -> inLn = false
                         "r" -> inRun = false
+                        "defRPr" -> inDefRPr = false
                         "p" -> {
                             if (currentParaRuns.isNotEmpty()) {
                                 textParagraphs.add(
@@ -669,7 +734,10 @@ object PptxParser {
                         }
                         "sp", "cxnSp" -> {
                             inSp = false
-                            val bounds = if (extCx > 0 && extCy > 0 && slideWidthEmus > 0 && slideHeightEmus > 0) {
+                            val isLineGeometry = shapeType == ShapeType.LINE || shapeType == ShapeType.CONNECTOR
+                            val hasUsableExtent = extCx > 0 && extCy > 0 ||
+                                (isLineGeometry && (extCx > 0 || extCy > 0))
+                            val bounds = if (hasUsableExtent && slideWidthEmus > 0 && slideHeightEmus > 0) {
                                 var curX = offX
                                 var curY = offY
                                 var curCx = extCx

@@ -574,7 +574,28 @@ object ExcelDocumentLoader {
         val workbook = ExcelWorkbookModel(fileName = file.name, filePath = file.absolutePath)
         val sheet = ExcelSheetModel(name = "Sheet1", index = 0)
 
-        // Many enterprise .xls files are actually HTML table or TSV files disguised as .xls
+        // Excel 97-2003 binary .xls uses an OLE2 compound-file signature.
+        // This project has no BIFF parser dependency, so do not decode binary bytes
+        // as text and produce a blank or misleading worksheet.
+        val signature = ByteArray(8)
+        val signatureRead = runCatching {
+            file.inputStream().use { it.read(signature) }
+        }.getOrDefault(0)
+        val isBinaryXls = signatureRead == 8 && signature.contentEquals(
+            byteArrayOf(
+                0xD0.toByte(), 0xCF.toByte(), 0x11.toByte(), 0xE0.toByte(),
+                0xA1.toByte(), 0xB1.toByte(), 0x1A.toByte(), 0xE1.toByte()
+            )
+        )
+        if (isBinaryXls) {
+            throw IllegalArgumentException(
+                "This is a legacy binary Excel (.xls) workbook. The built-in viewer currently " +
+                    "supports XLSX and text/HTML-based XLS files, but not binary XLS. " +
+                    "Open it in an office app and save a copy as .xlsx, then reopen it in HR Read."
+            )
+        }
+
+        // Some files named .xls are actually HTML-table exports; continue to support those.
         val textSample = runCatching { file.bufferedReader().use { it.readText().take(5000) } }.getOrDefault("")
         if (textSample.contains("<table", ignoreCase = true) || textSample.contains("<tr", ignoreCase = true)) {
             // HTML Table parser
