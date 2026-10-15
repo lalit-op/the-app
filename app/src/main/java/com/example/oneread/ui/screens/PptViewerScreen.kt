@@ -226,22 +226,38 @@ fun PptViewerScreen(
         errorMessage = null
         coroutineScope.launch(Dispatchers.IO) {
             try {
-                val file = File(liveDocument.path)
-                val ext = file.name.substringAfterLast('.', "").lowercase()
+                val uriName = liveDocument.uri.takeIf { it.isNotBlank() }
+                    ?.let { Uri.parse(it).lastPathSegment }
+                    .orEmpty()
+                val sourceName = liveDocument.title.ifBlank { uriName }
+                val ext = liveDocument.extension.removePrefix(".").ifBlank {
+                    sourceName.substringAfterLast('.', "")
+                }.ifBlank {
+                    uriName.substringAfterLast('.', "")
+                }.lowercase()
                 val isLegacy = ext in setOf("ppt", "pps", "pot")
+                if (ext !in setOf("ppt", "pps", "pot", "pptx", "pptm", "potx", "potm", "ppsx", "ppsm")) {
+                    throw IllegalArgumentException("Unsupported PowerPoint format: .${ext.ifBlank { "unknown" }}")
+                }
 
-                val model = if (file.exists() && file.canRead()) {
-                    if (isLegacy) LegacyPptParser.parse(file)
-                    else PptxParser.parse(file)
-                } else if (liveDocument.uri.isNotBlank()) {
-                    val temp = File(context.cacheDir, "temp_ppt_${System.currentTimeMillis()}.${if (isLegacy) "ppt" else "pptx"}")
-                    context.contentResolver.openInputStream(Uri.parse(liveDocument.uri))?.use { input ->
+                var file = liveDocument.path.takeIf { it.isNotBlank() }
+                    ?.let(::File)
+                    ?.takeIf { it.isFile && it.canRead() }
+
+                if (file == null && liveDocument.uri.isNotBlank()) {
+                    val cacheExtension = ext.ifBlank { "pptx" }
+                    val temp = File(context.cacheDir, "temp_ppt_${liveDocument.id}_${System.currentTimeMillis()}.$cacheExtension")
+                    val copied = context.contentResolver.openInputStream(Uri.parse(liveDocument.uri))?.use { input ->
                         temp.outputStream().use { output -> input.copyTo(output) }
-                    }
-                    if (isLegacy) LegacyPptParser.parse(temp)
-                    else PptxParser.parse(temp)
-                } else {
-                    throw IllegalArgumentException("File not found or unreadable: ${liveDocument.path}")
+                        true
+                    } ?: false
+                    if (copied && temp.isFile && temp.length() > 0) file = temp
+                }
+
+                val actualFile = file ?: throw IllegalArgumentException("File not found or unreadable: ${liveDocument.path}")
+                val model = if (isLegacy) LegacyPptParser.parse(actualFile) else PptxParser.parse(actualFile)
+                if (model.slides.isEmpty()) {
+                    throw IllegalArgumentException("No readable slides were found in ${actualFile.name}.")
                 }
 
                 withContext(Dispatchers.Main) {
@@ -251,7 +267,7 @@ fun PptViewerScreen(
                     isLoading = false
                     viewModel.updateTabProgress(
                         sheet = liveDocument.lastReadPage.coerceAtLeast(1),
-                        totalPages = model.slides.size.coerceAtLeast(1),
+                        totalPages = model.slides.size,
                         zoom = zoomLevel
                     )
                 }
