@@ -156,7 +156,13 @@ fun PptViewerScreen(
 
     fun setZoom(newZoom: Float) {
         val clamped = newZoom.coerceIn(0.5f, 3.0f)
+        // Zoom/pan applies to the single-slide canvas. Switch out of continuous
+        // reading mode when the user explicitly asks to zoom into one slide.
+        if (continuousScrollMode && clamped != 1.0f) {
+            continuousScrollMode = false
+        }
         zoomLevel = clamped
+        if (clamped <= 1.0f) offset = Offset.Zero
         viewModel.updateTabProgress(zoom = clamped)
     }
 
@@ -1134,6 +1140,8 @@ fun PptViewerScreen(
                                         if (continuousScrollMode) {
                                             continuousScrollMode = false
                                         } else {
+                                            zoomLevel = 1.0f
+                                            offset = Offset.Zero
                                             continuousScrollMode = true
                                         }
                                     },
