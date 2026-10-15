@@ -71,48 +71,57 @@ fun WordViewerComponent(
 
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = tab.scrollPosition)
 
-    LaunchedEffect(tab.filePath, tab.uriString) {
-        withContext(Dispatchers.IO) {
-            try {
-                isLoading = true
-                var targetFile = if (tab.filePath.isNotBlank()) File(tab.filePath) else null
-                if (targetFile == null || !targetFile.exists()) {
-                    if (tab.uriString.isNotBlank()) {
-                        val uri = Uri.parse(tab.uriString)
-                        val cacheFile = File(context.cacheDir, "word_tab_${tab.id}.docx")
-                        context.contentResolver.openInputStream(uri)?.use { input ->
-                            FileOutputStream(cacheFile).use { output -> input.copyTo(output) }
-                        }
-                        targetFile = cacheFile
-                    }
-                }
-
-                if (targetFile != null && targetFile.exists()) {
-                    val parsed = parseDocx(targetFile)
-                    if (parsed.isNotEmpty()) {
-                        paragraphs = parsed
-                    } else {
-                        // Fallback to text reading
-                        paragraphs = targetFile.readLines().filter { it.isNotBlank() }
-                    }
-                }
-
-                if (paragraphs.isEmpty()) {
-                    paragraphs = listOf(
-                        tab.title,
-                        "Document Overview",
-                        "This document has been opened in the unified Multi-Tab Document Workspace.",
-                        "All paragraph styles, headings, and formatting are formatted cleanly for reading and editing.",
-                        "Use the toolbar to zoom in/out, search for keywords, or switch between dark and light document page modes."
+    LaunchedEffect(tab.filePath, tab.uriString, tab.originalFileName, tab.title) {
+        isLoading = true
+        errorMessage = null
+        paragraphs = emptyList()
+        wordCount = 0
+        try {
+            val loadedParagraphs = withContext(Dispatchers.IO) {
+                val sourceName = tab.originalFileName.ifBlank { tab.title }
+                val extension = sourceName.substringAfterLast('.', "").lowercase()
+                val supportedExtensions = setOf("docx", "docm", "dotx", "dotm", "rtf")
+                if (extension !in supportedExtensions) {
+                    throw IllegalArgumentException(
+                        "This reader cannot render .${extension.ifBlank { "(unknown)" }} files yet. " +
+                            "Supported Word formats here are DOCX, DOCM, DOTX, DOTM, and RTF."
                     )
                 }
 
-                wordCount = paragraphs.sumOf { it.split(Regex("\\s+")).count { w -> w.isNotBlank() } }
-            } catch (e: Exception) {
-                errorMessage = e.message ?: "Could not read Word document."
-            } finally {
-                isLoading = false
+                val existingFile = File(tab.filePath)
+                val targetFile = if (existingFile.isFile && existingFile.canRead()) {
+                    existingFile
+                } else {
+                    if (tab.uriString.isBlank()) {
+                        throw IllegalArgumentException("The Word document is not accessible. Reopen it from the file picker.")
+                    }
+                    val uri = Uri.parse(tab.uriString)
+                    val cacheFile = File(context.cacheDir, "word_tab_${tab.id}.$extension")
+                    val input = context.contentResolver.openInputStream(uri)
+                        ?: throw IllegalArgumentException("Android could not open the selected Word document.")
+                    input.use { source ->
+                        cacheFile.outputStream().use { sink -> source.copyTo(sink) }
+                    }
+                    if (!cacheFile.isFile || cacheFile.length() == 0L) {
+                        throw IllegalArgumentException("The selected Word document is empty or could not be copied.")
+                    }
+                    cacheFile
+                }
+
+                parseDocx(targetFile)
             }
+
+            if (loadedParagraphs.isEmpty()) {
+                throw IllegalArgumentException("No readable paragraphs or tables were found in this Word document.")
+            }
+            paragraphs = loadedParagraphs
+            wordCount = loadedParagraphs.sumOf { para ->
+                para.split(Regex("\\s+")).count { word -> word.isNotBlank() }
+            }
+        } catch (e: Exception) {
+            errorMessage = e.message ?: "Could not open this Word document."
+        } finally {
+            isLoading = false
         }
     }
 
@@ -294,14 +303,12 @@ fun WordViewerComponent(
 }
 
 private fun parseDocx(file: File): List<String> {
-    return runCatching {
-        val doc = DocxParser.parse(file)
-        doc.allBlocks.mapNotNull { block ->
-            when (block) {
-                is DocxBlock.Paragraph -> block.fullText.ifBlank { null }
-                is DocxBlock.Table -> block.allText.ifBlank { null }
-                else -> null
-            }
+    val doc = DocxParser.parse(file)
+    return doc.allBlocks.mapNotNull { block ->
+        when (block) {
+            is DocxBlock.Paragraph -> block.fullText.ifBlank { null }
+            is DocxBlock.Table -> block.allText.ifBlank { null }
+            else -> null
         }
-    }.getOrElse { emptyList() }
+    }
 }
