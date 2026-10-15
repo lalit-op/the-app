@@ -1,6 +1,7 @@
 package com.example.oneread.excel.ui
 
 import android.content.Context
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -83,7 +84,9 @@ import com.example.oneread.excel.state.ExcelStateManager
 import com.example.oneread.ui.MainViewModel
 import com.example.oneread.ui.components.CommonViewerHeader
 import com.example.oneread.ui.components.HRReadViewerShell
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
@@ -185,26 +188,49 @@ fun ExcelViewerScreen(
         }
     }
 
-    // Load workbook on background thread
+    // Load the original workbook bytes even when Android supplied only a content:// URI.
     fun loadFile() {
         coroutineScope.launch {
+            isLoading = true
+            errorMessage = null
+            workbook = null
             try {
-                isLoading = true
-                errorMessage = null
-                val file = File(liveDocument.path)
-                val loaded = if (file.exists()) {
-                    ExcelDocumentLoader.loadWorkbook(file) { status ->
-                        loadingMessage = status
+                val loaded = withContext(Dispatchers.IO) {
+                    val pathFile = File(liveDocument.path)
+                    val inputFile = if (pathFile.isFile && pathFile.canRead()) {
+                        pathFile
+                    } else {
+                        val uriString = liveDocument.uri
+                        if (uriString.isBlank()) {
+                            throw IllegalArgumentException("Workbook is not accessible. Reopen it from the file picker.")
+                        }
+                        val extension = liveDocument.extension
+                            .ifBlank { liveDocument.title.substringAfterLast('.', "") }
+                            .lowercase()
+                        if (extension !in setOf("xls", "xlsx", "xlsm", "xlt", "xltx", "xltm", "csv", "tsv", "xml")) {
+                            throw IllegalArgumentException("Unsupported spreadsheet format: .${extension.ifBlank { "(unknown)" }}")
+                        }
+                        val cachedFile = File(context.cacheDir, "excel_screen_${liveDocument.id}.$extension")
+                        val input = context.contentResolver.openInputStream(Uri.parse(uriString))
+                            ?: throw IllegalArgumentException("Android could not open the selected workbook.")
+                        input.use { source ->
+                            cachedFile.outputStream().use { sink -> source.copyTo(sink) }
+                        }
+                        if (!cachedFile.isFile || cachedFile.length() == 0L) {
+                            throw IllegalArgumentException("The selected workbook is empty or could not be copied.")
+                        }
+                        cachedFile
                     }
-                } else {
-                    ExcelWorkbookModel.createEmpty(liveDocument.title)
+
+                    ExcelDocumentLoader.loadWorkbook(inputFile) { status ->
+                        coroutineScope.launch { loadingMessage = status }
+                    }
                 }
+
                 workbook = loaded
                 stateManager = ExcelStateManager(loaded)
                 searchManager = ExcelSearchManager(loaded)
                 activeSheetIndex = loaded.activeSheetIndex
-
-                // Update tab state
                 viewModel.updateTabProgress(
                     sheet = activeSheetIndex + 1,
                     totalPages = loaded.sheetCount
@@ -217,7 +243,7 @@ fun ExcelViewerScreen(
         }
     }
 
-    LaunchedEffect(liveDocument.path) {
+    LaunchedEffect(liveDocument.path, liveDocument.uri, liveDocument.extension, liveDocument.title) {
         loadFile()
     }
 
