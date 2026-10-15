@@ -206,7 +206,10 @@ fun WordViewerComponent(
             DocumentLoadingState("Reading Word document…")
         } else if (errorMessage != null) {
             DocumentErrorState(errorMessage ?: "Error loading document")
+        } else if (parsedDocument == null) {
+            DocumentErrorState("The Word document could not be rendered.")
         } else {
+            val doc = parsedDocument!!
             LazyColumn(
                 state = listState,
                 modifier = Modifier
@@ -215,12 +218,13 @@ fun WordViewerComponent(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 item {
-                    // Simulated Word Sheet / Page
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
                             .shadow(6.dp, RoundedCornerShape(6.dp)),
-                        color = if (isNightMode) Color(0xFF1E293B) else Color.White,
+                        // Structured Word blocks use the source text and formatting colors;
+                        // keep a white page to retain legibility and document contrast.
+                        color = Color.White,
                         shape = RoundedCornerShape(6.dp)
                     ) {
                         Column(
@@ -228,60 +232,19 @@ fun WordViewerComponent(
                                 .fillMaxWidth()
                                 .padding(horizontal = 24.dp, vertical = 32.dp)
                         ) {
-                            paragraphs.forEachIndexed { idx, para ->
-                                val isHeading = idx == 0 || (para.length < 60 && !para.endsWith('.'))
-                                val isMatch = searchQuery.isNotBlank() && para.contains(searchQuery, ignoreCase = true)
-
-                                if (isHeading) {
-                                    Text(
-                                        text = para,
-                                        style = if (idx == 0) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = if (idx == 0) (22 * zoomLevel).sp else (17 * zoomLevel).sp,
-                                        color = if (isNightMode) {
-                                            if (isMatch) Color(0xFFFBBF24) else Color(0xFFE2E8F0)
-                                        } else {
-                                            if (isMatch) Color(0xFFB45309) else Color(0xFF1E293B)
-                                        },
-                                        modifier = Modifier.padding(bottom = 12.dp, top = if (idx > 0) 16.dp else 0.dp)
-                                    )
-                                } else {
-                                    val annotated = if (isMatch) {
-                                        buildAnnotatedString {
-                                            var current = 0
-                                            val lower = para.lowercase()
-                                            val q = searchQuery.lowercase()
-                                            while (true) {
-                                                val pos = lower.indexOf(q, current)
-                                                if (pos == -1) {
-                                                    append(para.substring(current))
-                                                    break
-                                                }
-                                                append(para.substring(current, pos))
-                                                withStyle(
-                                                    SpanStyle(
-                                                        background = Color(0xFFFDE047),
-                                                        color = Color.Black,
-                                                        fontWeight = FontWeight.Bold
-                                                    )
-                                                ) {
-                                                    append(para.substring(pos, pos + searchQuery.length))
-                                                }
-                                                current = pos + searchQuery.length
-                                            }
-                                        }
-                                    } else {
-                                        buildAnnotatedString { append(para) }
-                                    }
-
-                                    Text(
-                                        text = annotated,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        lineHeight = (24 * zoomLevel).sp,
-                                        fontSize = (15 * zoomLevel).sp,
-                                        color = if (isNightMode) Color(0xFFCBD5E1) else Color(0xFF334155),
-                                        modifier = Modifier.padding(bottom = 14.dp)
-                                    )
+                            doc.headerElements.forEach { block ->
+                                RenderDocxBlock(block = block, searchQuery = searchQuery, isHeader = true)
+                            }
+                            if (doc.headerElements.isNotEmpty() && doc.bodyElements.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(12.dp))
+                            }
+                            doc.bodyElements.forEach { block ->
+                                RenderDocxBlock(block = block, searchQuery = searchQuery)
+                            }
+                            if (doc.footerElements.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(24.dp))
+                                doc.footerElements.forEach { block ->
+                                    RenderDocxBlock(block = block, searchQuery = searchQuery)
                                 }
                             }
                         }
@@ -291,17 +254,4 @@ fun WordViewerComponent(
             }
         }
     }
-}
-
-private fun parseDocx(file: File): List<String> {
-    return runCatching {
-        val doc = DocxParser.parse(file)
-        doc.allBlocks.mapNotNull { block ->
-            when (block) {
-                is DocxBlock.Paragraph -> block.fullText.ifBlank { null }
-                is DocxBlock.Table -> block.allText.ifBlank { null }
-                else -> null
-            }
-        }
-    }.getOrElse { emptyList() }
 }
