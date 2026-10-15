@@ -297,6 +297,14 @@ fun PptViewerScreen(
         loadPresentation()
     }
 
+    // Search highlights are part of the rendered bitmap. Invalidate the small
+    // render cache when the query changes so a cached unhighlighted slide cannot
+    // mask a new search result.
+    LaunchedEffect(searchQuery, presentation) {
+        slideBitmapCache.values.forEach { if (!it.isRecycled) it.recycle() }
+        slideBitmapCache.clear()
+    }
+
     // Clean up bitmaps on dispose
     DisposableEffect(Unit) {
         onDispose {
@@ -599,7 +607,7 @@ fun PptViewerScreen(
                                 IconButton(
                                     onClick = {
                                         if (pagerState.currentPage > 0) {
-                                            coroutineScope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) }
+                                            navigateToSlide(pagerState.currentPage - 1)
                                         }
                                     },
                                     enabled = pagerState.currentPage > 0,
@@ -619,7 +627,7 @@ fun PptViewerScreen(
                                 IconButton(
                                     onClick = {
                                         if (pagerState.currentPage < totalSlides - 1) {
-                                            coroutineScope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
+                                            navigateToSlide(pagerState.currentPage + 1)
                                         }
                                     },
                                     enabled = pagerState.currentPage < totalSlides - 1,
@@ -1415,7 +1423,7 @@ fun PptViewerScreen(
                 slideBitmapCache.clear()
                 showNewSlideDialog = false
                 coroutineScope.launch {
-                    pagerState.animateScrollToPage(pagerState.currentPage + 1)
+                    navigateToSlide(pagerState.currentPage + 1)
                 }
             },
             onDismiss = { showNewSlideDialog = false }
