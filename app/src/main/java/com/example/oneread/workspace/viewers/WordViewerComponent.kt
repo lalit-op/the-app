@@ -48,6 +48,7 @@ import com.example.oneread.workspace.model.DocumentTab
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.example.oneread.word.parser.DocxParser
+import com.example.oneread.word.ui.RenderDocxBlock
 import com.example.oneread.word.model.DocxBlock
 import java.io.File
 import java.io.FileOutputStream
@@ -62,7 +63,7 @@ fun WordViewerComponent(
     val context = LocalContext.current
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var paragraphs by remember { mutableStateOf<List<String>>(emptyList()) }
+    var parsedDocument by remember { mutableStateOf<com.example.oneread.word.model.DocxDocument?>(null) }
     var wordCount by remember { mutableStateOf(0) }
     var isNightMode by remember { mutableStateOf(false) }
     var isSearchActive by remember { mutableStateOf(false) }
@@ -71,43 +72,66 @@ fun WordViewerComponent(
 
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = tab.scrollPosition)
 
-    LaunchedEffect(tab.filePath, tab.uriString) {
+    LaunchedEffect(tab.filePath, tab.uriString, tab.originalFileName, tab.displayExtension) {
         withContext(Dispatchers.IO) {
             try {
                 isLoading = true
-                var targetFile = if (tab.filePath.isNotBlank()) File(tab.filePath) else null
-                if (targetFile == null || !targetFile.exists()) {
-                    if (tab.uriString.isNotBlank()) {
-                        val uri = Uri.parse(tab.uriString)
-                        val cacheFile = File(context.cacheDir, "word_tab_${tab.id}.docx")
-                        context.contentResolver.openInputStream(uri)?.use { input ->
-                            FileOutputStream(cacheFile).use { output -> input.copyTo(output) }
-                        }
+                errorMessage = null
+                parsedDocument = null
+
+                val uriName = tab.uriString.takeIf { it.isNotBlank() }
+                    ?.let { Uri.parse(it).lastPathSegment }
+                    .orEmpty()
+                val sourceName = tab.originalFileName.ifBlank { uriName.ifBlank { tab.title } }
+                val extension = sourceName.substringAfterLast('.', "")
+                    .ifBlank { tab.displayExtension }
+                    .lowercase()
+                    .removePrefix(".")
+
+                var targetFile = tab.filePath.takeIf { it.isNotBlank() }
+                    ?.let(::File)
+                    ?.takeIf { it.isFile && it.canRead() }
+
+                if (targetFile == null && tab.uriString.isNotBlank()) {
+                    val ext = extension.ifBlank { "docx" }
+                    val cacheFile = File(context.cacheDir, "word_tab_${tab.id}.$ext")
+                    val copied = context.contentResolver.openInputStream(Uri.parse(tab.uriString))?.use { input ->
+                        FileOutputStream(cacheFile).use { output -> input.copyTo(output) }
+                        true
+                    } ?: false
+                    if (copied && cacheFile.isFile && cacheFile.length() > 0) {
                         targetFile = cacheFile
                     }
                 }
 
-                if (targetFile != null && targetFile.exists()) {
-                    val parsed = parseDocx(targetFile)
-                    if (parsed.isNotEmpty()) {
-                        paragraphs = parsed
-                    } else {
-                        // Fallback to text reading
-                        paragraphs = targetFile.readLines().filter { it.isNotBlank() }
+                val file = targetFile ?: throw IllegalArgumentException("Cannot access the selected Word document.")
+                val ext = file.extension.lowercase()
+                if (ext !in setOf("docx", "docm", "dotx", "dotm", "rtf")) {
+                    throw IllegalArgumentException("The workspace Word renderer supports DOCX and RTF. Convert legacy DOC/ODT files to DOCX or PDF.")
+                }
+
+                if (ext != "rtf") {
+                    val validPackage = runCatching {
+                        ZipFile(file).use { it.getEntry("word/document.xml") != null }
+                    }.getOrDefault(false)
+                    if (!validPackage) {
+                        throw IllegalArgumentException("The file is not a valid Word OpenXML document.")
                     }
                 }
 
-                if (paragraphs.isEmpty()) {
-                    paragraphs = listOf(
-                        tab.title,
-                        "Document Overview",
-                        "This document has been opened in the unified Multi-Tab Document Workspace.",
-                        "All paragraph styles, headings, and formatting are formatted cleanly for reading and editing.",
-                        "Use the toolbar to zoom in/out, search for keywords, or switch between dark and light document page modes."
-                    )
+                val parsed = DocxParser.parse(file)
+                if (parsed.isEmpty) {
+                    throw IllegalArgumentException("The Word document contains no readable content.")
                 }
-
-                wordCount = paragraphs.sumOf { it.split(Regex("\\s+")).count { w -> w.isNotBlank() } }
+                parsedDocument = parsed
+                val allText = parsed.allBlocks.joinToString(" ") { block ->
+                    when (block) {
+                        is DocxBlock.Paragraph -> block.fullText
+                        is DocxBlock.Table -> block.allText
+                        is DocxBlock.ImageBlock, is DocxBlock.HorizontalDivider -> ""
+                    }
+                }
+                wordCount = allText.split(Regex("\\s+")).count { it.isNotBlank() }
             } catch (e: Exception) {
                 errorMessage = e.message ?: "Could not read Word document."
             } finally {
