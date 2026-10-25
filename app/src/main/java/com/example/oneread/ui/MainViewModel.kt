@@ -302,35 +302,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun startStartupSequence() {
-        // Phase 1: Immediate app launch with smooth, deterministic, branded splash.
-        // The splash screen never blocks on heavy file scanning or directory traversal.
+        // Phase 1: Fast, responsive splash screen that settles smoothly and quickly within ~380ms
         viewModelScope.launch {
             _splashProgress.value = 0
             _splashStatusText.value = "Loading..."
-            delay(120)
+            delay(60)
             _splashProgress.value = 35
-            delay(220)
+            delay(100)
             _splashProgress.value = 75
-            delay(250)
+            delay(120)
             _splashProgress.value = 100
             _splashStatusText.value = "Ready"
-            delay(260)
-            // Dismiss splash cleanly - enter Home screen immediately!
+            delay(100)
+            // Dismiss splash cleanly - enter Home screen immediately
             _isSplashActive.value = false
         }
 
-        // Phase 2: Start background file refresh asynchronously.
-        // Home screen displays immediately with the cached Room document database.
-        // File scanning runs in the background and updates the Room cache without blocking user interaction.
+        // Phase 2: Start background file refresh AFTER the initial UI has comfortably drawn and settled!
         viewModelScope.launch {
-            delay(400)
+            delay(1000)
             runBackgroundSync()
         }
     }
 
-    private suspend fun runBackgroundSync() {
-        if (!_hasFileAccess.value) return
-        if (_isScanning.value) return
+    private suspend fun runBackgroundSync() = withContext(Dispatchers.IO) {
+        if (!_hasFileAccess.value) return@withContext
+        if (_isScanning.value) return@withContext
         try {
             _isScanning.value = true
             repository.scanDeviceDocuments(isInitial = false)

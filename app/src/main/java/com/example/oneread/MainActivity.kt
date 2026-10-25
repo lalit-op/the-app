@@ -111,7 +111,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        WindowCompat.setDecorFitsSystemWindows(window, false)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(
                 android.graphics.Color.TRANSPARENT
@@ -120,13 +119,6 @@ class MainActivity : ComponentActivity() {
                 android.graphics.Color.TRANSPARENT
             )
         )
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            window.isNavigationBarContrastEnforced = false
-            window.isStatusBarContrastEnforced = false
-        }
-        val insetsController = WindowCompat.getInsetsController(window, window.decorView)
-        insetsController.isAppearanceLightStatusBars = false
-        insetsController.isAppearanceLightNavigationBars = false
 
         // Initialize centralized persistent KeepScreenOnManager
         KeepScreenOnManager.init(applicationContext)
@@ -163,20 +155,6 @@ class MainActivity : ComponentActivity() {
             val isSplashActive by viewModel.isSplashActive.collectAsState()
             val splashProgress by viewModel.splashProgress.collectAsState()
             val splashStatusText by viewModel.splashStatusText.collectAsState()
-
-            // Observe Activity lifecycle ON_RESUME to re-check real permission on return from Settings
-            val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-            androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
-                val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-                    if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                        viewModel.onAppForeground()
-                    }
-                }
-                lifecycleOwner.lifecycle.addObserver(observer)
-                onDispose {
-                    lifecycleOwner.lifecycle.removeObserver(observer)
-                }
-            }
 
             LaunchedEffect(isSplashActive) {
                 if (!isSplashActive) {

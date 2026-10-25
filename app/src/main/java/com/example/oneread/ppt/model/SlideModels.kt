@@ -158,7 +158,16 @@ enum class ShapeType {
     RIGHT_BRACE,
     LEFT_BRACKET,
     RIGHT_BRACKET,
-    DIAMOND
+    DIAMOND,
+    CUSTOM_PATH
+}
+
+sealed interface PathOp {
+    data class MoveTo(val x: Float, val y: Float) : PathOp
+    data class LineTo(val x: Float, val y: Float) : PathOp
+    data class CubicTo(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val x3: Float, val y3: Float) : PathOp
+    data class QuadTo(val x1: Float, val y1: Float, val x2: Float, val y2: Float) : PathOp
+    object Close : PathOp
 }
 
 data class ShapeElement(
@@ -169,7 +178,10 @@ data class ShapeElement(
     val fillColor: Color? = null,
     val strokeColor: Color? = null,
     val strokeWidth: Float = 0f,
-    val rotation: Float = 0f
+    val rotation: Float = 0f,
+    val flipH: Boolean = false,
+    val flipV: Boolean = false,
+    val customPathOps: List<PathOp> = emptyList()
 ) : SlideElement
 
 data class ImageElement(
@@ -186,7 +198,11 @@ data class TextElement(
     val backgroundColor: Color? = null,
     val borderColor: Color? = null,
     val borderWidth: Float = 0f,
-    val verticalAnchor: VerticalAnchor = VerticalAnchor.TOP
+    val verticalAnchor: VerticalAnchor = VerticalAnchor.TOP,
+    val paddingLeftPt: Float = 7.2f,
+    val paddingTopPt: Float = 3.6f,
+    val paddingRightPt: Float = 7.2f,
+    val paddingBottomPt: Float = 3.6f
 ) : SlideElement
 
 enum class VerticalAnchor {
@@ -207,7 +223,10 @@ data class SlideParagraph(
     val runs: List<SlideTextRun> = emptyList(),
     val isBullet: Boolean = false,
     val bulletChar: String = "•",
-    val bulletLevel: Int = 0
+    val bulletLevel: Int = 0,
+    val spaceAfterPt: Float = 0f,
+    val spaceBeforePt: Float = 0f,
+    val lineSpacingMultiplier: Float = 1.25f
 ) {
     val plainText: String
         get() = runs.joinToString("") { it.text }

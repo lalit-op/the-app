@@ -67,7 +67,10 @@ object KeepScreenOnManager {
             if (enabled) {
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             } else {
-                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                val hasFlag = (window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) != 0
+                if (hasFlag) {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
             }
         } catch (_: Exception) {}
     }

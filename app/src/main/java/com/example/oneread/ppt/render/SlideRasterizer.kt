@@ -52,8 +52,9 @@ object SlideRasterizer {
         val pxPerPt = height.toFloat() / slideHeightPt
         val scaleFactor = height.toFloat() / 1080f
 
-        // 2. Draw Visual Elements in Z-Index Order
-        for (element in slide.elements) {
+        // 2. Draw Visual Elements in Z-Index Order (Master/layout background elements first, text on top)
+        val sortedElements = slide.elements.sortedBy { it.zIndex }
+        for (element in sortedElements) {
             val left = element.bounds.left * width
             val top = element.bounds.top * height
             val right = element.bounds.right * width
@@ -100,9 +101,17 @@ object SlideRasterizer {
     }
 
     private fun drawShape(canvas: Canvas, shape: ShapeElement, rect: RectF, scaleFactor: Float) {
-        if (shape.rotation != 0f) {
+        val hasTransform = shape.rotation != 0f || shape.flipH || shape.flipV
+        if (hasTransform) {
             canvas.save()
-            canvas.rotate(shape.rotation, rect.centerX(), rect.centerY())
+            if (shape.flipH || shape.flipV) {
+                val sx = if (shape.flipH) -1f else 1f
+                val sy = if (shape.flipV) -1f else 1f
+                canvas.scale(sx, sy, rect.centerX(), rect.centerY())
+            }
+            if (shape.rotation != 0f) {
+                canvas.rotate(shape.rotation, rect.centerX(), rect.centerY())
+            }
         }
 
         val fillPaint = shape.fillColor?.let {
@@ -117,8 +126,18 @@ object SlideRasterizer {
                 color = shape.strokeColor.toArgb()
                 style = Paint.Style.STROKE
                 strokeWidth = (shape.strokeWidth * scaleFactor).coerceAtLeast(1.5f * scaleFactor)
+                strokeCap = Paint.Cap.ROUND
+                strokeJoin = Paint.Join.ROUND
             }
         } else null
+
+        val braceDefaultPaint = strokePaint ?: fillPaint ?: Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = shape.strokeColor?.toArgb() ?: android.graphics.Color.rgb(30, 41, 59)
+            strokeWidth = 2.5f * scaleFactor
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
 
         when (shape.shapeType) {
             ShapeType.LINE, ShapeType.CONNECTOR -> {
@@ -129,56 +148,10 @@ object SlideRasterizer {
                 canvas.drawLine(rect.left, rect.centerY(), rect.right, rect.centerY(), linePaint)
             }
             ShapeType.LEFT_BRACE -> {
-                val bracePaint = strokePaint ?: fillPaint ?: Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = android.graphics.Color.rgb(30, 41, 59)
-                    strokeWidth = 2.5f * scaleFactor
-                    style = Paint.Style.STROKE
-                }
-                bracePaint.style = Paint.Style.STROKE
-                val path = Path().apply {
-                    val midX = rect.left + rect.width() * 0.45f
-                    val tipX = rect.left
-                    val rightX = rect.right
-                    val topY = rect.top
-                    val botY = rect.bottom
-                    val midY = rect.centerY()
-                    val cornerH = (rect.height() * 0.08f).coerceAtMost(24f * scaleFactor)
-
-                    moveTo(rightX, topY)
-                    cubicTo(midX, topY, midX, topY + cornerH, midX, topY + cornerH)
-                    lineTo(midX, midY - cornerH)
-                    cubicTo(midX, midY, tipX, midY, tipX, midY)
-                    cubicTo(midX, midY, midX, midY + cornerH, midX, midY + cornerH)
-                    lineTo(midX, botY - cornerH)
-                    cubicTo(midX, botY, rightX, botY, rightX, botY)
-                }
-                canvas.drawPath(path, bracePaint)
+                drawBracePath(canvas, rect, braceDefaultPaint, isLeftBrace = true, scaleFactor = scaleFactor)
             }
             ShapeType.RIGHT_BRACE -> {
-                val bracePaint = strokePaint ?: fillPaint ?: Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = android.graphics.Color.rgb(30, 41, 59)
-                    strokeWidth = 2.5f * scaleFactor
-                    style = Paint.Style.STROKE
-                }
-                bracePaint.style = Paint.Style.STROKE
-                val path = Path().apply {
-                    val midX = rect.right - rect.width() * 0.45f
-                    val tipX = rect.right
-                    val leftX = rect.left
-                    val topY = rect.top
-                    val botY = rect.bottom
-                    val midY = rect.centerY()
-                    val cornerH = (rect.height() * 0.08f).coerceAtMost(24f * scaleFactor)
-
-                    moveTo(leftX, topY)
-                    cubicTo(midX, topY, midX, topY + cornerH, midX, topY + cornerH)
-                    lineTo(midX, midY - cornerH)
-                    cubicTo(midX, midY, tipX, midY, tipX, midY)
-                    cubicTo(midX, midY, midX, midY + cornerH, midX, midY + cornerH)
-                    lineTo(midX, botY - cornerH)
-                    cubicTo(midX, botY, leftX, botY, leftX, botY)
-                }
-                canvas.drawPath(path, bracePaint)
+                drawBracePath(canvas, rect, braceDefaultPaint, isLeftBrace = false, scaleFactor = scaleFactor)
             }
             ShapeType.LEFT_BRACKET -> {
                 val bracketPaint = strokePaint ?: fillPaint ?: Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -258,15 +231,92 @@ object SlideRasterizer {
                 fillPaint?.let { canvas.drawPath(path, it) }
                 strokePaint?.let { canvas.drawPath(path, it) }
             }
+            ShapeType.CUSTOM_PATH -> {
+                if (shape.customPathOps.isNotEmpty()) {
+                    val path = Path().apply {
+                        for (op in shape.customPathOps) {
+                            when (op) {
+                                is PathOp.MoveTo -> moveTo(rect.left + op.x * rect.width(), rect.top + op.y * rect.height())
+                                is PathOp.LineTo -> lineTo(rect.left + op.x * rect.width(), rect.top + op.y * rect.height())
+                                is PathOp.CubicTo -> cubicTo(
+                                    rect.left + op.x1 * rect.width(), rect.top + op.y1 * rect.height(),
+                                    rect.left + op.x2 * rect.width(), rect.top + op.y2 * rect.height(),
+                                    rect.left + op.x3 * rect.width(), rect.top + op.y3 * rect.height()
+                                )
+                                is PathOp.QuadTo -> quadTo(
+                                    rect.left + op.x1 * rect.width(), rect.top + op.y1 * rect.height(),
+                                    rect.left + op.x2 * rect.width(), rect.top + op.y2 * rect.height()
+                                )
+                                is PathOp.Close -> close()
+                            }
+                        }
+                    }
+                    val drawPaint = strokePaint ?: fillPaint ?: braceDefaultPaint
+                    fillPaint?.let { canvas.drawPath(path, it) }
+                    strokePaint?.let { canvas.drawPath(path, it) }
+                    if (fillPaint == null && strokePaint == null) {
+                        canvas.drawPath(path, drawPaint)
+                    }
+                }
+            }
             ShapeType.RECTANGLE -> {
-                fillPaint?.let { canvas.drawRect(rect, it) }
-                strokePaint?.let { canvas.drawRect(rect, it) }
+                // If this is a tall, narrow stroke-only shape with no fill, it's a structural bracket/brace, not a solid hollow box!
+                val isNarrowVerticalStroke = shape.fillColor == null && rect.height() > rect.width() * 2.2f && rect.width() < 40f * scaleFactor
+                if (isNarrowVerticalStroke) {
+                    drawBracePath(canvas, rect, braceDefaultPaint, isLeftBrace = true, scaleFactor = scaleFactor)
+                } else {
+                    fillPaint?.let { canvas.drawRect(rect, it) }
+                    strokePaint?.let { canvas.drawRect(rect, it) }
+                }
             }
         }
 
-        if (shape.rotation != 0f) {
+        if (hasTransform) {
             canvas.restore()
         }
+    }
+
+    private fun drawBracePath(canvas: Canvas, rect: RectF, bracePaint: Paint, isLeftBrace: Boolean, scaleFactor: Float) {
+        bracePaint.style = Paint.Style.STROKE
+        bracePaint.strokeCap = Paint.Cap.ROUND
+        bracePaint.strokeJoin = Paint.Join.ROUND
+        val path = Path().apply {
+            val cornerH = (rect.height() * 0.08f).coerceIn(10f * scaleFactor, 28f * scaleFactor)
+            if (isLeftBrace) {
+                // Tip is on the left; opening arms are on the right
+                val tipX = rect.left
+                val rightX = rect.right
+                val midX = rect.left + rect.width() * 0.45f
+                val topY = rect.top
+                val botY = rect.bottom
+                val midY = rect.centerY()
+
+                moveTo(rightX, topY)
+                cubicTo(midX, topY, midX, topY + cornerH, midX, topY + cornerH)
+                lineTo(midX, midY - cornerH)
+                cubicTo(midX, midY, tipX, midY, tipX, midY)
+                cubicTo(midX, midY, midX, midY + cornerH, midX, midY + cornerH)
+                lineTo(midX, botY - cornerH)
+                cubicTo(midX, botY, rightX, botY, rightX, botY)
+            } else {
+                // Tip is on the right; opening arms are on the left
+                val tipX = rect.right
+                val leftX = rect.left
+                val midX = rect.right - rect.width() * 0.45f
+                val topY = rect.top
+                val botY = rect.bottom
+                val midY = rect.centerY()
+
+                moveTo(leftX, topY)
+                cubicTo(midX, topY, midX, topY + cornerH, midX, topY + cornerH)
+                lineTo(midX, midY - cornerH)
+                cubicTo(midX, midY, tipX, midY, tipX, midY)
+                cubicTo(midX, midY, midX, midY + cornerH, midX, midY + cornerH)
+                lineTo(midX, botY - cornerH)
+                cubicTo(midX, botY, leftX, botY, leftX, botY)
+            }
+        }
+        canvas.drawPath(path, bracePaint)
     }
 
     private fun drawImage(canvas: Canvas, image: ImageElement, rect: RectF) {
